@@ -87,9 +87,9 @@ namespace SharpGLTF.Schema2
             Guard.NotNull(primaryImage, nameof(primaryImage));
             Guard.MustShareLogicalParent(this, primaryImage, nameof(primaryImage));
 
-            if (primaryImage.IsDds || primaryImage.IsWebp)
+            if (primaryImage.Content.IsDds || primaryImage.Content.IsWebp)
             {
-                var fallback = LogicalParent.UseImage(Image.DefaultPngImage.Slice(0));
+                var fallback = LogicalParent.UseImage(Memory.MemoryImage.DefaultPngImage.Slice(0));
                 SetImages(primaryImage, fallback);
             }
             else
@@ -105,17 +105,17 @@ namespace SharpGLTF.Schema2
             Guard.NotNull(fallbackImage, nameof(fallbackImage));
             Guard.MustShareLogicalParent(this, primaryImage, nameof(primaryImage));
             Guard.MustShareLogicalParent(this, fallbackImage, nameof(fallbackImage));
-            Guard.IsTrue(primaryImage.IsDds || primaryImage.IsWebp, "Primary image must be DDS or WEBP");
-            Guard.IsTrue(fallbackImage.IsJpeg || fallbackImage.IsPng, nameof(fallbackImage), "Fallback image must be PNG or JPEG");
+            Guard.IsTrue(primaryImage.Content.IsDds || primaryImage.Content.IsWebp, "Primary image must be DDS or WEBP");
+            Guard.IsTrue(fallbackImage.Content.IsJpg || fallbackImage.Content.IsPng, nameof(fallbackImage), "Fallback image must be PNG or JPEG");
 
             ClearImages();
 
-            if (primaryImage.IsDds)
+            if (primaryImage.Content.IsDds)
             {
                 _UseDDSTexture().Image = primaryImage;
             }
 
-            if (primaryImage.IsWebp)
+            if (primaryImage.Content.IsWebp)
             {
                 _UseWEBPTexture().Image = primaryImage;
             }
@@ -152,12 +152,13 @@ namespace SharpGLTF.Schema2
 
         #region Validation
 
-        protected override void OnValidateReferences(ValidationContext result)
+        protected override void OnValidateReferences(ValidationContext validate)
         {
-            base.OnValidateReferences(result);
+            base.OnValidateReferences(validate);
 
-            result.CheckArrayIndexAccess("Source", _source, this.LogicalParent.LogicalImages);
-            result.CheckArrayIndexAccess("Sampler", _sampler, this.LogicalParent.LogicalTextureSamplers);
+            validate
+                .IsNullOrIndex("Source", _source, this.LogicalParent.LogicalImages)
+                .IsNullOrIndex("Sampler", _sampler, this.LogicalParent.LogicalTextureSamplers);
         }
 
         #endregion
@@ -180,7 +181,7 @@ namespace SharpGLTF.Schema2
                 if (value != null)
                 {
                     Guard.MustShareLogicalParent(_Parent, value, nameof(value));
-                    Guard.IsTrue(value.IsDds, nameof(value));
+                    Guard.IsTrue(value.Content.IsDds, nameof(value));
                 }
 
                 _source = value?.LogicalIndex;
@@ -205,7 +206,7 @@ namespace SharpGLTF.Schema2
                 if (value != null)
                 {
                     Guard.MustShareLogicalParent(_Parent, value, nameof(value));
-                    Guard.IsTrue(value.IsWebp, nameof(value));
+                    Guard.IsTrue(value.Content.IsWebp, nameof(value));
                 }
 
                 _source = value?.LogicalIndex;

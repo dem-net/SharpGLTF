@@ -4,6 +4,8 @@ using System.Linq;
 using System.Numerics;
 using System.Text;
 
+using SharpGLTF.Schema2;
+
 namespace SharpGLTF.Scenes
 {
     /// <summary>
@@ -53,16 +55,40 @@ namespace SharpGLTF.Scenes
 
         public NodeBuilder(string name) { Name = name; }
 
-        private NodeBuilder(NodeBuilder parent)
+        public Dictionary<NodeBuilder, NodeBuilder> DeepClone()
         {
-            _Parent = parent;
+            var dict = new Dictionary<NodeBuilder, NodeBuilder>();
+
+            DeepClone(dict);
+
+            return dict;
+        }
+
+        private NodeBuilder DeepClone(IDictionary<NodeBuilder, NodeBuilder> nodeMap)
+        {
+            var clone = new NodeBuilder();
+
+            nodeMap[this] = clone;
+
+            clone.Name = this.Name;
+            clone._Matrix = this._Matrix;
+            clone._Scale = this._Scale?.Clone();
+            clone._Rotation = this._Rotation?.Clone();
+            clone._Translation = this._Translation?.Clone();
+
+            foreach (var c in _Children)
+            {
+                clone.AddNode(c.DeepClone(nodeMap));
+            }
+
+            return clone;
         }
 
         #endregion
 
         #region data
 
-        private readonly NodeBuilder _Parent;
+        private NodeBuilder _Parent;
 
         private readonly List<NodeBuilder> _Children = new List<NodeBuilder>();
 
@@ -103,7 +129,7 @@ namespace SharpGLTF.Scenes
         /// </summary>
         public Matrix4x4 LocalMatrix
         {
-            get => Transforms.AffineTransform.Evaluate(_Matrix, Scale?.Value, Rotation?.Value, Translation?.Value);
+            get => Transforms.Matrix4x4Factory.CreateFrom(_Matrix, Scale?.Value, Rotation?.Value, Translation?.Value);
             set
             {
                 if (HasAnimations) { _DecomposeMatrix(value); return; }
@@ -115,6 +141,25 @@ namespace SharpGLTF.Scenes
             }
         }
 
+        internal Transforms.Matrix4x4Double LocalMatrixPrecise
+        {
+            get
+            {
+                if (_Matrix.HasValue) return new Transforms.Matrix4x4Double(_Matrix.Value);
+
+                var s = _Scale?.Value ?? Vector3.One;
+                var r = _Rotation?.Value ?? Quaternion.Identity;
+                var t = _Translation?.Value ?? Vector3.Zero;
+
+                return
+                    Transforms.Matrix4x4Double.CreateScale(s.X, s.Y, s.Z)
+                    *
+                    Transforms.Matrix4x4Double.CreateFromQuaternion(r.Sanitized())
+                    *
+                    Transforms.Matrix4x4Double.CreateTranslation(t.X, t.Y, t.Z);
+            }
+        }
+
         #pragma warning disable CA1721 // Property names should not match get methods
 
         /// <summary>
@@ -122,11 +167,7 @@ namespace SharpGLTF.Scenes
         /// </summary>
         public Transforms.AffineTransform LocalTransform
         {
-            get => _Matrix.HasValue
-                ?
-                Transforms.AffineTransform.Create(_Matrix.Value)
-                :
-                Transforms.AffineTransform.Create(Scale?.Value, Rotation?.Value, Translation?.Value);
+            get => Transforms.AffineTransform.CreateFromAny(_Matrix, _Scale?.Value, _Rotation?.Value, Translation?.Value);
             set
             {
                 Guard.IsTrue(value.IsValid, nameof(value));
@@ -147,12 +188,21 @@ namespace SharpGLTF.Scenes
             get
             {
                 var vs = this.Parent;
-                return vs == null ? LocalMatrix : Transforms.AffineTransform.LocalToWorld(vs.WorldMatrix, LocalMatrix);
+                return vs == null ? LocalMatrix : Transforms.Matrix4x4Factory.LocalToWorld(vs.WorldMatrix, LocalMatrix);
             }
             set
             {
                 var vs = this.Parent;
-                LocalMatrix = vs == null ? value : Transforms.AffineTransform.WorldToLocal(vs.WorldMatrix, value);
+                LocalMatrix = vs == null ? value : Transforms.Matrix4x4Factory.WorldToLocal(vs.WorldMatrix, value);
+            }
+        }
+
+        internal Transforms.Matrix4x4Double WorldMatrixPrecise
+        {
+            get
+            {
+                var vs = this.Parent;
+                return vs == null ? LocalMatrixPrecise : LocalMatrixPrecise * vs.WorldMatrixPrecise;
             }
         }
 
@@ -164,10 +214,23 @@ namespace SharpGLTF.Scenes
 
         public NodeBuilder CreateNode(string name = null)
         {
-            var c = new NodeBuilder(this);
-            _Children.Add(c);
+            var c = new NodeBuilder();
             c.Name = name;
+            AddNode(c);
             return c;
+        }
+
+        public void AddNode(NodeBuilder node)
+        {
+            Guard.NotNull(node, nameof(node));
+            Guard.IsFalse(Object.ReferenceEquals(this, node), "cannot add to itself");
+
+            if (node._Parent == this) return; // already added to this node.
+
+            Guard.MustBeNull(node._Parent, nameof(node), "is child of another node.");
+
+            node._Parent = this;
+            _Children.Add(node);
         }
 
         /// <summary>
@@ -261,14 +324,17 @@ namespace SharpGLTF.Scenes
         private void _DecomposeMatrix()
         {
             if (!_Matrix.HasValue) return;
-            if (_Matrix.Value == Matrix4x4.Identity) return;
-            _DecomposeMatrix(_Matrix.Value);
+
+            var m = _Matrix.Value;
             _Matrix = null;
+
+            // we do the decomposition AFTER setting _Matrix to null to prevent an infinite recursive loop. Fixes #37
+            if (m != Matrix4x4.Identity) _DecomposeMatrix(m);
         }
 
         private void _DecomposeMatrix(Matrix4x4 matrix)
         {
-            var affine = Transforms.AffineTransform.Create(matrix);
+            var affine = new Transforms.AffineTransform(matrix);
 
             UseScale().Value = affine.Scale;
             UseRotation().Value = affine.Rotation;
@@ -343,7 +409,7 @@ namespace SharpGLTF.Scenes
             var rotation = Rotation?.GetValueAt(animationTrack, time);
             var translation = Translation?.GetValueAt(animationTrack, time);
 
-            return Transforms.AffineTransform.Create(scale, rotation, translation);
+            return new Transforms.AffineTransform(scale, rotation, translation);
         }
 
         public Matrix4x4 GetWorldMatrix(string animationTrack, float time)
@@ -352,7 +418,14 @@ namespace SharpGLTF.Scenes
 
             var vs = Parent;
             var lm = GetLocalTransform(animationTrack, time).Matrix;
-            return vs == null ? lm : Transforms.AffineTransform.LocalToWorld(vs.GetWorldMatrix(animationTrack, time), lm);
+            return vs == null ? lm : Transforms.Matrix4x4Factory.LocalToWorld(vs.GetWorldMatrix(animationTrack, time), lm);
+        }
+
+        public Matrix4x4 GetInverseBindMatrix(Matrix4x4? meshWorldMatrix = null)
+        {
+            Transforms.Matrix4x4Double mwx = meshWorldMatrix ?? Matrix4x4.Identity;
+
+            return (Matrix4x4)Transforms.SkinnedTransform.CalculateInverseBinding(mwx, this.WorldMatrixPrecise);
         }
 
         #endregion
@@ -374,6 +447,48 @@ namespace SharpGLTF.Scenes
         public NodeBuilder WithLocalRotation(Quaternion rotation)
         {
             this.UseRotation().Value = rotation;
+            return this;
+        }
+
+        public NodeBuilder WithLocalTranslation(string animTrack, IReadOnlyDictionary<float, Vector3> keyframes)
+        {
+            Guard.NotNull(keyframes, nameof(keyframes));
+
+            var track = this.UseTranslation(animTrack);
+
+            foreach (var kf in keyframes)
+            {
+                track.SetPoint(kf.Key, kf.Value);
+            }
+
+            return this;
+        }
+
+        public NodeBuilder WithLocalRotation(string animTrack, IReadOnlyDictionary<float, Quaternion> keyframes)
+        {
+            Guard.NotNull(keyframes, nameof(keyframes));
+
+            var track = this.UseRotation(animTrack);
+
+            foreach (var kf in keyframes)
+            {
+                track.SetPoint(kf.Key, kf.Value);
+            }
+
+            return this;
+        }
+
+        public NodeBuilder WithLocalScale(string animTrack, IReadOnlyDictionary<float, Vector3> keyframes)
+        {
+            Guard.NotNull(keyframes, nameof(keyframes));
+
+            var track = this.UseScale(animTrack);
+
+            foreach (var kf in keyframes)
+            {
+                track.SetPoint(kf.Key, kf.Value);
+            }
+
             return this;
         }
 

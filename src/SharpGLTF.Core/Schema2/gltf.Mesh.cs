@@ -46,7 +46,7 @@ namespace SharpGLTF.Schema2
 
         public IReadOnlyList<MeshPrimitive> Primitives => _primitives;
 
-        public IReadOnlyList<Single> MorphWeights => _weights.Count == 0 ? null : _weights.Select(item => (Single)item).ToList();
+        public IReadOnlyList<Single> MorphWeights => GetMorphWeights();
 
         public bool AllPrimitivesHaveJoints => Primitives.All(p => p.GetVertexAccessor("JOINTS_0") != null);
 
@@ -54,20 +54,18 @@ namespace SharpGLTF.Schema2
 
         #region API
 
+        public IReadOnlyList<Single> GetMorphWeights()
+        {
+            if (_weights == null || _weights.Count == 0) return Array.Empty<Single>();
+
+            return _weights.Select(item => (float)item).ToList();
+        }
+
         public void SetMorphWeights(Transforms.SparseWeight8 weights)
         {
             int count = _primitives.Max(item => item.MorphTargetsCount);
 
-            while (_weights.Count > count) _weights.RemoveAt(_weights.Count - 1);
-            while (_weights.Count < count) _weights.Add(0);
-
-            if (_weights.Count > 0)
-            {
-                foreach (var kw in weights.GetIndexedWeights())
-                {
-                    _weights[kw.Index] = kw.Weight;
-                }
-            }
+            _weights.SetMorphWeights(count, weights);
         }
 
         protected override IEnumerable<ExtraProperties> GetLogicalChildren()
@@ -93,28 +91,26 @@ namespace SharpGLTF.Schema2
 
         #region Validation
 
-        protected override void OnValidateReferences(Validation.ValidationContext result)
+        protected override void OnValidateReferences(Validation.ValidationContext validate)
         {
-            base.OnValidateReferences(result);
+            validate
+                .IsGreater(nameof(Primitives), this.Primitives.Count, 0)
+                .IsSetCollection(nameof(Primitives), _primitives);
 
-            result.CheckLinksInCollection("Primitives", _primitives);
-
-            foreach (var p in this.Primitives) p.ValidateReferences(result);
+            base.OnValidateReferences(validate);
         }
 
-        protected override void OnValidate(Validation.ValidationContext result)
+        protected override void OnValidateContent(Validation.ValidationContext validate)
         {
-            base.OnValidate(result);
+            if (_weights.Count > 0)
+            {
+                foreach (var p in this.Primitives)
+                {
+                    validate.GetContext(p).AreEqual("MorphTargetsCount", p.MorphTargetsCount, _weights.Count);
+                }
+            }
 
-            foreach (var p in this.Primitives) p.Validate(result);
-
-            var morphTargetsCount = this.Primitives
-                .Select(item => item.MorphTargetsCount)
-                .Distinct();
-
-            if (morphTargetsCount.Count() != 1) result.AddSemanticError("Count", "All primitives must have the same number of morph targets.");
-
-            if (_weights.Count != 0 && morphTargetsCount.First() != _weights.Count) result.AddSemanticError("Weights", $"The length of weights array ({_weights.Count}) does not match the number of morph targets({morphTargetsCount.First()}).");
+            base.OnValidateContent(validate);
         }
 
         #endregion
@@ -124,7 +120,7 @@ namespace SharpGLTF.Schema2
     {
         /// <summary>
         /// Creates a new <see cref="Mesh"/> instance
-        /// and adds it to <see cref="ModelRoot.LogicalMeshes"/>.
+        /// and appends it to <see cref="ModelRoot.LogicalMeshes"/>.
         /// </summary>
         /// <param name="name">The name of the instance.</param>
         /// <returns>A <see cref="Mesh"/> instance.</returns>

@@ -18,11 +18,12 @@ namespace SharpGLTF.Scenes
 
             var dstNode = dstScene.CreateNode();
 
+            dstNode.Name = _NodeName;
             dstNode.LocalMatrix = _WorldTransform;
 
             schema2Target.Setup(dstNode, context);
 
-            context.SetMorphAnimation(dstNode, this.Morphings);
+            Schema2SceneBuilder.SetMorphAnimation(dstNode, this.Morphings);
         }
     }
 
@@ -36,7 +37,7 @@ namespace SharpGLTF.Scenes
 
             schema2Target.Setup(dstNode, context);
 
-            context.SetMorphAnimation(dstNode, this.Morphings);
+            Schema2SceneBuilder.SetMorphAnimation(dstNode, this.Morphings);
         }
     }
 
@@ -47,34 +48,35 @@ namespace SharpGLTF.Scenes
             if (!(Content is SCHEMA2NODE schema2Target)) return;
 
             var skinnedMeshNode = dstScene.CreateNode();
+            skinnedMeshNode.Name = _NodeName;
 
-            if (_TargetBindMatrix.HasValue)
+            if (_MeshPoseWorldMatrix.HasValue)
             {
                 var dstNodes = new Node[_Joints.Count];
 
                 for (int i = 0; i < dstNodes.Length; ++i)
                 {
-                    var srcNode = _Joints[i];
+                    var (joints, inverseBindMatrix) = _Joints[i];
 
-                    System.Diagnostics.Debug.Assert(!srcNode.InverseBindMatrix.HasValue);
+                    System.Diagnostics.Debug.Assert(!inverseBindMatrix.HasValue);
 
-                    dstNodes[i] = context.GetNode(srcNode.Joints);
+                    dstNodes[i] = context.GetNode(joints);
                 }
 
                 #if DEBUG
                 for (int i = 0; i < dstNodes.Length; ++i)
                 {
-                    var srcNode = _Joints[i];
-                    System.Diagnostics.Debug.Assert(dstNodes[i].WorldMatrix == srcNode.Joints.WorldMatrix);
+                    var (joints, inverseBindMatrix) = _Joints[i];
+                    System.Diagnostics.Debug.Assert(dstNodes[i].WorldMatrix == joints.WorldMatrix);
                 }
                 #endif
 
-                skinnedMeshNode.WithSkinBinding(_TargetBindMatrix.Value, dstNodes);
+                skinnedMeshNode.WithSkinBinding(_MeshPoseWorldMatrix.Value, dstNodes);
             }
             else
             {
                 var skinnedJoints = _Joints
-                .Select(j => (context.GetNode(j.Joints), j.InverseBindMatrix.Value))
+                .Select(j => (context.GetNode(j.Joint), j.InverseBindMatrix.Value))
                 .ToArray();
 
                 skinnedMeshNode.WithSkinBinding(skinnedJoints);
@@ -86,7 +88,7 @@ namespace SharpGLTF.Scenes
 
             schema2Target.Setup(skinnedMeshNode, context);
 
-            context.SetMorphAnimation(skinnedMeshNode, this.Morphings);
+            Schema2SceneBuilder.SetMorphAnimation(skinnedMeshNode, this.Morphings);
         }
     }
 }

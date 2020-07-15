@@ -19,6 +19,7 @@ namespace SharpGLTF.Schema2
             RegisterExtension<Material, MaterialPBRSpecularGlossiness>("KHR_materials_pbrSpecularGlossiness");
 
             RegisterExtension<Material, MaterialUnlit>("KHR_materials_unlit");
+            RegisterExtension<Material, MaterialClearCoat>("KHR_materials_clearcoat");
 
             RegisterExtension<ModelRoot, KHR_lights_punctualglTFextension>("KHR_lights_punctual");
             RegisterExtension<Node, KHR_lights_punctualnodeextension>("KHR_lights_punctual");
@@ -52,13 +53,13 @@ namespace SharpGLTF.Schema2
         {
             var ptype = parent.GetType();
 
-            var entry = _Extensions.FirstOrDefault(item => item.Name == key && item.ParentType == ptype);
+            var (name, parentType, extType) = _Extensions.FirstOrDefault(item => item.Name == key && item.ParentType == ptype);
 
-            if (entry.Name == null) return null;
+            if (name == null) return null;
 
             var instance = Activator.CreateInstance
                 (
-                entry.ExtType,
+                extType,
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance,
                 null,
                 new Object[] { parent },
@@ -83,6 +84,22 @@ namespace SharpGLTF.Schema2
 
     partial class ModelRoot
     {
+        #region properties
+
+        public bool MeshQuantizationAllowed { get; private set; }
+
+        #endregion
+
+        #region API
+
+        /// <summary>
+        /// Immediatelly called after deserialization, it assigns
+        /// </summary>
+        private void _FindMeshQuantizationExtension()
+        {
+            MeshQuantizationAllowed = this._extensionsRequired.Contains("KHR_mesh_quantization");
+        }
+
         internal void UpdateExtensionsSupport()
         {
             var used = RetrieveUsedExtensions();
@@ -90,6 +107,16 @@ namespace SharpGLTF.Schema2
             // update the used list
             this._extensionsUsed.Clear();
             this._extensionsUsed.AddRange(used);
+
+            _SetRequiredExtension("KHR_mesh_quantization", MeshQuantizationAllowed);
+        }
+
+        private void _SetRequiredExtension(string extension, bool enabled)
+        {
+            if (!enabled) { this._extensionsRequired.Remove(extension); return; }
+
+            if (this._extensionsRequired.Contains(extension)) return;
+            this._extensionsRequired.Add(extension);
         }
 
         internal IEnumerable<ExtraProperties> GetLogicalChildrenFlattened()
@@ -102,7 +129,7 @@ namespace SharpGLTF.Schema2
         internal IEnumerable<string> RetrieveUsedExtensions()
         {
             // retrieve ALL the property based objects of the whole model.
-            var allObjects = GetLogicalChildrenFlattened();
+            var allObjects = new[] { this }.Concat(GetLogicalChildrenFlattened());
 
             // check all the extensions used by each object
             var used = new HashSet<string>();
@@ -135,5 +162,7 @@ namespace SharpGLTF.Schema2
 
             this._extensionsUsed.Add(id);
         }
+
+        #endregion
     }
 }

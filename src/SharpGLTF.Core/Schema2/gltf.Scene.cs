@@ -57,18 +57,47 @@ namespace SharpGLTF.Schema2
             return VisualChildren.Any(item => item._ContainsVisualNode(node, true));
         }
 
+        internal void _RemoveVisualNode(Node node)
+        {
+            Guard.NotNull(node, nameof(node));
+            Guard.MustShareLogicalParent(this, node, nameof(node));
+
+            _nodes.Remove(node.LogicalIndex);
+        }
+
+        internal void _UseVisualNode(Node node)
+        {
+            Guard.NotNull(node, nameof(node));
+            Guard.MustShareLogicalParent(this, node, nameof(node));
+
+            var lidx = node.LogicalIndex;
+
+            if (_nodes.Contains(lidx)) return; // already in.
+
+            // a root node cannot be a child of another node.
+            node._RemoveFromVisualParent();
+
+            _nodes.Add(lidx);
+        }
+
         #endregion
 
         #region Validation
 
-        protected override void OnValidateReferences(Validation.ValidationContext result)
+        protected override void OnValidateReferences(Validation.ValidationContext validate)
         {
-            base.OnValidateReferences(result);
+            base.OnValidateReferences(validate);
 
             // check out of range indices
             foreach (var idx in this._nodes)
             {
-                result.CheckArrayIndexAccess( nameof(VisualChildren), idx, this.LogicalParent.LogicalNodes);
+                validate.IsNullOrIndex(nameof(VisualChildren), idx, this.LogicalParent.LogicalNodes);
+            }
+
+            // checks if a root node is being used as a child.
+            foreach (var node in this.LogicalParent.LogicalNodes)
+            {
+                if (this._nodes.Any(ridx => node._HasVisualChild(ridx))) validate.GetContext(node)._LinkThrow("Children", "Root nodes cannot be children.");
             }
 
             // check duplicated indices

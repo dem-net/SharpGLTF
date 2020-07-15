@@ -87,7 +87,7 @@ namespace SharpGLTF.Schema2
         /// <summary>
         /// Gets the visual root <see cref="Node"/> instance that contains this <see cref="Node"/>.
         /// </summary>
-        public Node VisualRoot => this.LogicalParent._FindVisualRootNode(this);
+        public Node VisualRoot => _FindVisualRootNode(this);
 
         /// <summary>
         /// Gets the collection of <see cref="Scene"/> instances that reference this <see cref="Node"/>.
@@ -177,17 +177,9 @@ namespace SharpGLTF.Schema2
         }
 
         /// <summary>
-        /// Gets or sets the Morph Weights of this <see cref="Node"/>.
+        /// Gets the Morph Weights of this <see cref="Node"/>.
         /// </summary>
-        public IReadOnlyList<Single> MorphWeights
-        {
-            get => _weights.Count == 0 ? Mesh?.MorphWeights : _weights.Select(item => (float)item).ToList();
-            set
-            {
-                _weights.Clear();
-                if (value != null) _weights.AddRange(value.Select(item => (Double)item));
-            }
-        }
+        public IReadOnlyList<Single> MorphWeights => GetMorphWeights();
 
         #endregion
 
@@ -200,7 +192,7 @@ namespace SharpGLTF.Schema2
         /// </summary>
         public Transforms.AffineTransform LocalTransform
         {
-            get => new Transforms.AffineTransform(_matrix, _scale, _rotation, _translation);
+            get => Transforms.AffineTransform.CreateFromAny(_matrix, _scale, _rotation, _translation);
             set
             {
                 Guard.IsFalse(this._skin.HasValue, _NOTRANSFORMMESSAGE);
@@ -221,7 +213,7 @@ namespace SharpGLTF.Schema2
         /// </summary>
         public Matrix4x4 LocalMatrix
         {
-            get => Transforms.AffineTransform.Evaluate(_matrix, _scale, _rotation, _translation);
+            get => Transforms.Matrix4x4Factory.CreateFrom(_matrix, _scale, _rotation, _translation);
             set
             {
                 if (value == Matrix4x4.Identity)
@@ -250,16 +242,75 @@ namespace SharpGLTF.Schema2
             get
             {
                 var vs = VisualParent;
-                return vs == null ? LocalMatrix : Transforms.AffineTransform.LocalToWorld(vs.WorldMatrix, LocalMatrix);
+                return vs == null ? LocalMatrix : Transforms.Matrix4x4Factory.LocalToWorld(vs.WorldMatrix, LocalMatrix);
             }
             set
             {
                 var vs = VisualParent;
-                LocalMatrix = vs == null ? value : Transforms.AffineTransform.WorldToLocal(vs.WorldMatrix, value);
+                LocalMatrix = vs == null ? value : Transforms.Matrix4x4Factory.WorldToLocal(vs.WorldMatrix, value);
+            }
+        }
+
+        internal Transforms.Matrix4x4Double LocalMatrixPrecise
+        {
+            get
+            {
+                if (_matrix.HasValue) return new Transforms.Matrix4x4Double(_matrix.Value);
+
+                var s = _scale ?? Vector3.One;
+                var r = _rotation ?? Quaternion.Identity;
+                var t = _translation ?? Vector3.Zero;
+
+                return
+                    Transforms.Matrix4x4Double.CreateScale(s.X, s.Y, s.Z)
+                    *
+                    Transforms.Matrix4x4Double.CreateFromQuaternion(r.Sanitized())
+                    *
+                    Transforms.Matrix4x4Double.CreateTranslation(t.X, t.Y, t.Z);
+            }
+        }
+
+        internal Transforms.Matrix4x4Double WorldMatrixPrecise
+        {
+            get
+            {
+                var vs = this.VisualParent;
+                return vs == null ? LocalMatrixPrecise : LocalMatrixPrecise * vs.WorldMatrixPrecise;
             }
         }
 
         #pragma warning restore CA1721 // Property names should not match get methods
+
+        /// <summary>
+        /// Gets a value indicating whether this transform is affected by any animation.
+        /// </summary>
+        public bool IsTransformAnimated
+        {
+            get
+            {
+                var root = this.LogicalParent;
+
+                if (root.LogicalAnimations.Count == 0) return false;
+
+                // check if it's affected by animations.
+                if (root.LogicalAnimations.Any(anim => anim.FindScaleSampler(this) != null)) return true;
+                if (root.LogicalAnimations.Any(anim => anim.FindRotationSampler(this) != null)) return true;
+                if (root.LogicalAnimations.Any(anim => anim.FindTranslationSampler(this) != null)) return true;
+
+                return false;
+            }
+        }
+
+        internal bool IsTransformDecomposed
+        {
+            get
+            {
+                if (_scale.HasValue) return true;
+                if (_rotation.HasValue) return true;
+                if (_translation.HasValue) return true;
+                return false;
+            }
+        }
 
         #endregion
 
@@ -278,12 +329,40 @@ namespace SharpGLTF.Schema2
 
             var vs = VisualParent;
             var lm = GetLocalTransform(animation, time).Matrix;
-            return vs == null ? lm : Transforms.AffineTransform.LocalToWorld(vs.GetWorldMatrix(animation, time), lm);
+            return vs == null ? lm : Transforms.Matrix4x4Factory.LocalToWorld(vs.GetWorldMatrix(animation, time), lm);
+        }
+
+        public IReadOnlyList<Single> GetMorphWeights()
+        {
+            if (!_mesh.HasValue) return Array.Empty<Single>();
+
+            if (_weights == null || _weights.Count == 0) return Mesh.MorphWeights;
+
+            return _weights.Select(item => (float)item).ToList();
+        }
+
+        public void SetMorphWeights(Transforms.SparseWeight8 weights)
+        {
+            Guard.IsTrue(_mesh.HasValue, nameof(weights), "Nodes with no mesh cannot have morph weights");
+
+            int count = Mesh.Primitives.Max(item => item.MorphTargetsCount);
+
+            _weights.SetMorphWeights(count, weights);
         }
 
         #endregion
 
         #region API - hierarchy
+
+        internal static Node _FindVisualRootNode(Node childNode)
+        {
+            while (true)
+            {
+                var parent = childNode.VisualParent;
+                if (parent == null) return childNode;
+                childNode = parent;
+            }
+        }
 
         /// <summary>
         /// Creates a new <see cref="Node"/> instance,
@@ -368,92 +447,141 @@ namespace SharpGLTF.Schema2
             return allChildren;
         }
 
+        internal void _SetVisualParent(Node parentNode)
+        {
+            Guard.MustShareLogicalParent(this, parentNode, nameof(parentNode));
+            Guard.IsFalse(_ContainsVisualNode(parentNode, true), nameof(parentNode));
+
+            // remove from all the scenes
+            foreach (var s in LogicalParent.LogicalScenes)
+            {
+                s._RemoveVisualNode(this);
+            }
+
+            // remove from current parent
+            _RemoveFromVisualParent();
+
+            // add to parent node.
+            parentNode._children.Add(this.LogicalIndex);
+        }
+
+        internal void _RemoveFromVisualParent()
+        {
+            var oldParent = this.VisualParent;
+            if (oldParent == null) return;
+
+            oldParent._children.Remove(this.LogicalIndex);
+        }
+
         #endregion
 
         #region validation
 
-        protected override void OnValidateReferences(Validation.ValidationContext result)
+        protected override void OnValidateReferences(Validation.ValidationContext validate)
         {
-            base.OnValidateReferences(result);
+            base.OnValidateReferences(validate);
 
             // check out of range indices
             foreach (var idx in this._children)
             {
-                result.CheckArrayIndexAccess(nameof(VisualChildren), idx, this.LogicalParent.LogicalNodes);
+                validate.IsNullOrIndex(nameof(VisualChildren), idx, this.LogicalParent.LogicalNodes);
             }
 
-            result.CheckArrayIndexAccess(nameof(Mesh), _mesh, this.LogicalParent.LogicalMeshes);
-            result.CheckArrayIndexAccess(nameof(Skin), _skin, this.LogicalParent.LogicalSkins);
-            result.CheckArrayIndexAccess(nameof(Camera), _camera, this.LogicalParent.LogicalCameras);
+            validate
+                .IsNullOrIndex(nameof(Mesh), _mesh, this.LogicalParent.LogicalMeshes)
+                .IsNullOrIndex(nameof(Skin), _skin, this.LogicalParent.LogicalSkins)
+                .IsNullOrIndex(nameof(Camera), _camera, this.LogicalParent.LogicalCameras);
         }
 
-        protected override void OnValidate(Validation.ValidationContext result)
+        internal static void _ValidateParentHierarchy(IEnumerable<Node> nodes, Validation.ValidationContext validate)
         {
-            base.OnValidate(result);
+            var childRefs = new List<int>();
 
-            _ValidateHierarchy(result);
-            _ValidateTransforms(result);
-            _ValidateMeshAndSkin(result, Mesh, Skin);
+            // in order to check if one node has more than two parents we simply need to check if its
+            // index is repeated among the combined list of children indices.
+
+            foreach (var n in nodes)
+            {
+                childRefs.AddRange(n._children);
+            }
+
+            var uniqueCount = childRefs.Distinct().Count();
+
+            if (uniqueCount == childRefs.Count) return;
+
+            var dupes = childRefs
+                .GroupBy(item => item)
+                .Where(group => group.Count() > 1);
+
+            foreach (var dupe in dupes)
+            {
+                validate._LinkThrow($"LogicalNode[{dupe.Key}]", "has more than one parent.");
+            }
         }
 
-        private void _ValidateHierarchy(Validation.ValidationContext result)
+        protected override void OnValidateContent(Validation.ValidationContext validate)
+        {
+            base.OnValidateContent(validate);
+
+            _ValidateChildrenHierarchy(validate);
+            _ValidateTransforms(validate);
+            _ValidateMeshAndSkin(validate, Mesh, Skin, _weights);
+        }
+
+        private void _ValidateChildrenHierarchy(Validation.ValidationContext validate)
         {
             var allNodes = this.LogicalParent.LogicalNodes;
 
-            var thisIndex = this.LogicalIndex;
+            var nodePath = new Stack<int>();
 
-            var pidx = thisIndex;
-
-            while (true)
+            void checkTree(Node n)
             {
-                result = result.GetContext(result.Root.LogicalNodes[pidx]);
+                var nidx = n.LogicalIndex;
 
-                // every node must have 0 or 1 parents.
+                if (nodePath.Contains(nidx)) validate._LinkThrow($"LogicalNode[{nidx}]", "has a circular reference.");
 
-                var allParents = allNodes
-                    .Where(n => n._HasVisualChild(pidx))
-                    .ToList();
+                nodePath.Push(nidx);
 
-                if (allParents.Count == 0) break; // we're already root
+                foreach (var cidx in n._children) checkTree(allNodes[cidx]);
 
-                if (allParents.Count > 1)
-                {
-                    var parents = string.Join(" ", allParents);
-
-                    result.AddLinkError($"is child of nodes {parents}. A node can only have one parent.");
-                    break;
-                }
-
-                if (allParents[0].LogicalIndex == pidx)
-                {
-                    result.AddLinkError("is a part of a node loop.");
-                    break;
-                }
-
-                pidx = allParents[0].LogicalIndex;
+                nodePath.Pop();
             }
+
+            checkTree(this);
         }
 
-        private void _ValidateTransforms(Validation.ValidationContext result)
+        private void _ValidateTransforms(Validation.ValidationContext validate)
         {
-            result.CheckIsFinite("Scale", _scale);
-            result.CheckIsFinite("Rotation", _rotation);
-            result.CheckIsFinite("Translation", _translation);
-            result.CheckIsMatrix("Matrix", _matrix);
+            if (_matrix.HasValue)
+            {
+                validate
+                    .IsUndefined(nameof(_scale), _scale)
+                    .IsUndefined(nameof(_rotation), _rotation)
+                    .IsUndefined(nameof(_translation), _translation);
+            }
+
+            validate
+                .IsPosition("Scale", _scale.AsValue(Vector3.One))
+                .IsRotation("Rotation", _rotation.AsValue(Quaternion.Identity))
+                .IsPosition("Translation", _translation.AsValue(Vector3.Zero))
+                .IsNullOrMatrix("Rotation", _matrix, true, true);
         }
 
-        private static void _ValidateMeshAndSkin(Validation.ValidationContext result, Mesh mesh, Skin skin)
+        private static void _ValidateMeshAndSkin(Validation.ValidationContext validate, Mesh mesh, Skin skin, List<Double> weights)
         {
-            if (mesh == null && skin == null) return;
+            var wcount = weights == null ? 0 : weights.Count;
 
-            if (mesh != null)
-            {
-                if (skin == null && mesh.AllPrimitivesHaveJoints) result.AddLinkWarning("Skin", "Node uses skinned mesh, but has no skin defined.");
-            }
+            if (mesh == null && skin == null && wcount == 0) return;
 
             if (skin != null)
             {
-                if (mesh == null || !mesh.AllPrimitivesHaveJoints) result.AddLinkError("Mesh", "Node has skin defined, but mesh has no joints data.");
+                validate.IsDefined("Mesh", mesh);
+                validate.IsTrue("Mesh", mesh.AllPrimitivesHaveJoints, "Node has skin defined, but mesh has no joints data.");
+            }
+
+            if (mesh == null)
+            {
+                validate.AreEqual("weights", wcount, 0); // , "Morph weights require a mesh."
             }
         }
 
@@ -471,16 +599,6 @@ namespace SharpGLTF.Schema2
             return _nodes.FirstOrDefault(item => item._HasVisualChild(childIdx));
         }
 
-        internal Node _FindVisualRootNode(Node childNode)
-        {
-            while (true)
-            {
-                var parent = childNode.VisualParent;
-                if (parent == null) return childNode;
-                childNode = parent;
-            }
-        }
-
         public Node CreateLogicalNode()
         {
             var n = new Node();
@@ -493,6 +611,73 @@ namespace SharpGLTF.Schema2
             var n = CreateLogicalNode();
             parentChildren.Add(n.LogicalIndex);
             return n;
+        }
+
+        /// <summary>
+        /// Applies a world transform to all the scenes of the model.
+        /// </summary>
+        /// <param name="basisTransform">The transform to apply.</param>
+        /// <param name="basisNodeName">The name of the new root node, if it needs to be created.</param>
+        /// <remarks>
+        /// This method is appropiate to apply a general axis or scale change to the whole model.
+        /// Animations are preserved by encapsulating animated nodes inside a master basis transform node.
+        /// Meanwhile, unanimated nodes are transformed directly.
+        /// If the determinant of <paramref name="basisTransform"/> is negative, the face culling should be
+        /// flipped when rendering.
+        /// </remarks>
+        public void ApplyBasisTransform(Matrix4x4 basisTransform, string basisNodeName = "BasisTransform")
+        {
+            // TODO: nameless nodes with decomposed transform
+            // could be considered intrinsic.
+
+            Guard.IsTrue(basisTransform.IsValid(true, true), nameof(basisTransform));
+
+            // gather all root nodes:
+            var rootNodes = this.LogicalNodes
+                .Where(item => item.VisualRoot == item)
+                .ToList();
+
+            // find all the nodes that cannot be modified
+            bool isSensible(Node node)
+            {
+                if (node.IsTransformAnimated) return true;
+                if (node.IsTransformDecomposed) return true;
+                return false;
+            }
+
+            var sensibleNodes = rootNodes
+                .Where(item => isSensible(item))
+                .ToList();
+
+            // find all the nodes that we can change their transform matrix safely.
+            var intrinsicNodes = rootNodes
+                .Except(sensibleNodes)
+                .ToList();
+
+            // apply the transform to the nodes that are safe to change.
+            foreach (var n in intrinsicNodes)
+            {
+                n.LocalMatrix *= basisTransform;
+            }
+
+            if (sensibleNodes.Count == 0) return;
+
+            // create a proxy node to be used as the root for all sensible nodes.
+            var basisNode = CreateLogicalNode();
+            basisNode.Name = basisNodeName;
+            basisNode.LocalMatrix = basisTransform;
+
+            // add the basis node to all scenes
+            foreach (var scene in this.LogicalScenes)
+            {
+                scene._UseVisualNode(basisNode);
+            }
+
+            // assign all the sensible nodes to the basis node.
+            foreach (var n in sensibleNodes)
+            {
+                n._SetVisualParent(basisNode);
+            }
         }
     }
 }

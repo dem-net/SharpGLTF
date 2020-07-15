@@ -50,28 +50,28 @@ namespace SharpGLTF.Runtime
         private readonly GraphicsDevice _Device;
         private readonly GraphicsResourceTracker _Disposables;
 
-        private readonly Dictionary<IReadOnlyList<Byte>, Texture2D> _Textures = new Dictionary<IReadOnlyList<byte>, Texture2D>(new ArraySegmentContentComparer());        
+        private readonly Dictionary<Memory.MemoryImage, Texture2D> _Textures = new Dictionary<Memory.MemoryImage, Texture2D>();        
 
         #endregion
 
         #region API
 
-        public Texture2D UseTexture(ArraySegment<Byte> data, string name = null)
+        public Texture2D UseTexture(Memory.MemoryImage image, string name = null)
         {
             if (_Device == null) throw new InvalidOperationException();
 
-            if (data.Count == 0) return null;
+            if (!image.IsValid) return null;
 
-            if (_Textures.TryGetValue(data, out Texture2D tex)) return tex;
+            if (_Textures.TryGetValue(image, out Texture2D tex)) return tex;
 
-            using (var m = new System.IO.MemoryStream(data.Array, data.Offset, data.Count, false))
+            using (var m = image.Open())
             {
                 tex = Texture2D.FromStream(_Device, m);
                 _Disposables.AddDisposable(tex);
 
                 tex.Name = name;
 
-                _Textures[data] = tex;
+                _Textures[image] = tex;
 
                 return tex;
             }
@@ -86,30 +86,7 @@ namespace SharpGLTF.Runtime
             return UseTexture(new ArraySegment<byte>(toBytes), "_InternalSolidWhite");
         }
 
-        #endregion
-
-        #region types
-
-        private class ArraySegmentContentComparer : IEqualityComparer<IReadOnlyList<Byte>>
-        {
-            public bool Equals(IReadOnlyList<byte> x, IReadOnlyList<byte> y)
-            {
-                return Enumerable.SequenceEqual(x, y);
-            }
-
-            public int GetHashCode(IReadOnlyList<byte> obj)
-            {
-                var h = 0;
-                for (int i = 0; i < obj.Count; ++i)
-                {
-                    h ^= obj[i].GetHashCode();
-                    h *= 17;
-                }
-                return h;
-            }
-        }
-
-        #endregion
+        #endregion        
     }
 
     class MaterialFactory
@@ -131,10 +108,10 @@ namespace SharpGLTF.Runtime
         private readonly TextureFactory _TexFactory;
         private readonly GraphicsResourceTracker _Disposables;
 
-        private readonly Dictionary<Object, Effect> _StaticEffects = new Dictionary<Object, Effect>();
+        private readonly Dictionary<Object, Effect> _RigidEffects = new Dictionary<Object, Effect>();
         private readonly Dictionary<Object, SkinnedEffect> _SkinnedEffects = new Dictionary<Object, SkinnedEffect>();
 
-        private BasicEffect _DefaultStatic;
+        private BasicEffect _DefaultRigid;
         private SkinnedEffect _DefaultSkinned;
 
         #endregion        
@@ -145,26 +122,26 @@ namespace SharpGLTF.Runtime
         // given monogame's limitations, we try to guess the most appropiate values
         // to have a reasonably good looking renders.
 
-        public Effect UseStaticEffect(Schema2.Material srcMaterial)
+        public Effect UseRigidEffect(Schema2.Material srcMaterial)
         {
             if (_Device == null) throw new InvalidOperationException();
 
             if (srcMaterial == null)
             {
-                if (_DefaultStatic == null)
+                if (_DefaultRigid == null)
                 {
-                    _DefaultStatic = new BasicEffect(_Device);
-                    _Disposables.AddDisposable(_DefaultStatic);
+                    _DefaultRigid = new BasicEffect(_Device);
+                    _Disposables.AddDisposable(_DefaultRigid);
                 }
 
-                return _DefaultStatic;
+                return _DefaultRigid;
             }
 
-            if (_StaticEffects.TryGetValue(srcMaterial, out Effect dstMaterial)) return dstMaterial;
+            if (_RigidEffects.TryGetValue(srcMaterial, out Effect dstMaterial)) return dstMaterial;
 
             dstMaterial = srcMaterial.Alpha == Schema2.AlphaMode.MASK ? CreateAlphaTestEffect(srcMaterial) : CreateBasicEffect(srcMaterial);
 
-            _StaticEffects[srcMaterial] = dstMaterial;
+            _RigidEffects[srcMaterial] = dstMaterial;
 
             return dstMaterial;
         }
@@ -225,7 +202,7 @@ namespace SharpGLTF.Runtime
                 if (_DefaultSkinned == null)
                 {
                     _DefaultSkinned = new SkinnedEffect(_Device);
-                    _Disposables.AddDisposable(_DefaultStatic);
+                    _Disposables.AddDisposable(_DefaultRigid);
                 }
 
                 return _DefaultSkinned;
@@ -327,7 +304,7 @@ namespace SharpGLTF.Runtime
             if (name == null) name = "null";
             name += "-Diffuse";            
 
-            return _TexFactory.UseTexture(diffuse.Value.Texture?.PrimaryImage?.GetImageContent() ?? default, name);
+            return _TexFactory.UseTexture(diffuse.Value.Texture?.PrimaryImage?.Content ?? default, name);
         }
 
         #endregion

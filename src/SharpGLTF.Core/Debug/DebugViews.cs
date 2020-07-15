@@ -55,7 +55,7 @@ namespace SharpGLTF.Debug
 
         public Schema2.BufferView Source => _Value.SourceBufferView;
 
-        public (Schema2.DimensionType, Schema2.EncodingType, bool) Format => (_Value.Dimensions, _Value.Encoding, _Value.Normalized);
+        public (Schema2.DimensionType Dimensions, Schema2.EncodingType Encoding, bool Normalized) Format => (_Value.Dimensions, _Value.Encoding, _Value.Normalized);
 
         public Object[] Items
         {
@@ -67,7 +67,7 @@ namespace SharpGLTF.Debug
                 if (_Value.Dimensions == Schema2.DimensionType.VEC4) return _Value.AsVector4Array().Cast<Object>().ToArray();
                 if (_Value.Dimensions == Schema2.DimensionType.MAT4) return _Value.AsMatrix4x4Array().Cast<Object>().ToArray();
 
-                var itemByteSz = _Value.ElementByteSize;
+                var itemByteSz = _Value.Format.ByteSize;
                 var byteStride = Math.Max(_Value.SourceBufferView.ByteStride, itemByteSz);
                 var items = new ArraySegment<Byte>[_Value.Count];
 
@@ -94,5 +94,17 @@ namespace SharpGLTF.Debug
 
         [System.Diagnostics.DebuggerBrowsable(System.Diagnostics.DebuggerBrowsableState.RootHidden)]
         public Schema2.MeshPrimitive[] Primitives => _Value.Primitives.ToArray();
+    }
+
+    internal sealed class _Matrix4x4DoubleProxy
+    {
+        public _Matrix4x4DoubleProxy(Transforms.Matrix4x4Double value) { _Value = value; }
+
+        private Transforms.Matrix4x4Double _Value;
+
+        public (Double X, Double Y, Double Z, Double W) Row1 => (_Value.M11, _Value.M12, _Value.M13, _Value.M14);
+        public (Double X, Double Y, Double Z, Double W) Row2 => (_Value.M21, _Value.M22, _Value.M23, _Value.M24);
+        public (Double X, Double Y, Double Z, Double W) Row3 => (_Value.M31, _Value.M32, _Value.M33, _Value.M34);
+        public (Double X, Double Y, Double Z, Double W) Row4 => (_Value.M41, _Value.M42, _Value.M43, _Value.M44);
     }
 }

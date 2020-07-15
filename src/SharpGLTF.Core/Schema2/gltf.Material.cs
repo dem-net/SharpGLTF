@@ -95,5 +95,38 @@ namespace SharpGLTF.Schema2
         }
 
         #endregion
+
+        #region validation
+
+        protected override void OnValidateContent(Validation.ValidationContext result)
+        {
+            base.OnValidateContent(result);
+
+            var shaderCount = 0;
+            // if (_pbrMetallicRoughness != null) ++shaderCount; this is the fallback
+            if (this.GetExtension<MaterialPBRSpecularGlossiness>() != null) ++shaderCount;
+            if (this.GetExtension<MaterialUnlit>() != null) ++shaderCount;
+            if (this.GetExtension<MaterialClearCoat>() != null) ++shaderCount;
+        }
+
+        #endregion
+    }
+
+    public partial class ModelRoot
+    {
+        /// <summary>
+        /// Creates a new <see cref="Material"/> instance and appends it to <see cref="ModelRoot.LogicalMaterials"/>.
+        /// </summary>
+        /// <param name="name">The name of the instance.</param>
+        /// <returns>A <see cref="Material"/> instance.</returns>
+        public Material CreateMaterial(string name = null)
+        {
+            var mat = new Material();
+            mat.Name = name;
+
+            _materials.Add(mat);
+
+            return mat;
+        }
     }
 }

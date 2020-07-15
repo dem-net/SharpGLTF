@@ -2,8 +2,6 @@
 
 using NUnit.Framework;
 
-using SharpGLTF.Geometry.Parametric;
-
 namespace SharpGLTF.Schema2.Authoring
 {
     using VPOSNRM = Geometry.VertexBuilder<Geometry.VertexTypes.VertexPositionNormal,Geometry.VertexTypes.VertexEmpty,Geometry.VertexTypes.VertexEmpty>;
@@ -44,7 +42,7 @@ namespace SharpGLTF.Schema2.Authoring
                 ["D"] = new IO.JsonDictionary { ["S"]= 1, ["T"] = 2 }
             };
 
-            var json = root.GetJSON(Newtonsoft.Json.Formatting.Indented);
+            var json = root.GetJSON(true);
 
             var bytes = root.WriteGLB();
             var rootBis = ModelRoot.ParseGLB(bytes);
@@ -195,19 +193,9 @@ namespace SharpGLTF.Schema2.Authoring
         {
             TestContext.CurrentContext.AttachShowDirLink();
             TestContext.CurrentContext.AttachGltfValidatorLinks();
-
-            var mesh = new Geometry.MeshBuilder<Geometry.VertexTypes.VertexPositionNormal>();
-
-            mesh.AddCube(new Materials.MaterialBuilder(), Matrix4x4.Identity);            
-
+            
             var model = ModelRoot.CreateModel();
-
-            model.CreateMeshes(mesh);
-
-            model.UseScene(0)
-                .CreateNode()
-                .WithMesh(model.LogicalMeshes[0]);
-
+            
             model.UseScene(0)
                 .CreateNode()
                 .WithLocalTranslation(new Vector3(0, 3, 10))

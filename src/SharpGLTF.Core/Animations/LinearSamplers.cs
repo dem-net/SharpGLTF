@@ -6,10 +6,65 @@ using System.Text;
 
 namespace SharpGLTF.Animations
 {
+    readonly struct SingleValueSampler<T> : ICurveSampler<T>, IConvertibleCurve<T>
+    {
+        #region lifecycle
+
+        public static ICurveSampler<T> CreateForSingle(IEnumerable<(float Key, T Value)> sequence)
+        {
+            if (sequence.Skip(1).Any()) return null;
+
+            return new SingleValueSampler<T>(sequence.First().Value);
+        }
+
+        public static ICurveSampler<T> CreateForSingle(IEnumerable<(float Key, (T, T, T) Value)> sequence)
+        {
+            if (sequence.Skip(1).Any()) return null;
+
+            return new SingleValueSampler<T>(sequence.First().Value.Item2);
+        }
+
+        private SingleValueSampler(T value)
+        {
+            _Value = value;
+        }
+
+        #endregion
+
+        #region data
+
+        private readonly T _Value;
+
+        #endregion
+
+        #region API
+
+        public int MaxDegree => 0;
+
+        public T GetPoint(float offset) { return _Value; }
+
+        public IReadOnlyDictionary<float, T> ToLinearCurve()
+        {
+            return new Dictionary<float, T> { [0] = _Value };
+        }
+
+        public IReadOnlyDictionary<float, (T TangentIn, T Value, T TangentOut)> ToSplineCurve()
+        {
+            return new Dictionary<float, (T TangentIn, T Value, T TangentOut)> { [0] = (default, _Value, default) };
+        }
+
+        public IReadOnlyDictionary<float, T> ToStepCurve()
+        {
+            return new Dictionary<float, T> { [0] = _Value };
+        }
+
+        #endregion
+    }
+
     /// <summary>
     /// Defines a <see cref="Vector3"/> curve sampler that can be sampled with STEP or LINEAR interpolations.
     /// </summary>
-    struct Vector3LinearSampler : ICurveSampler<Vector3>, IConvertibleCurve<Vector3>
+    readonly struct Vector3LinearSampler : ICurveSampler<Vector3>, IConvertibleCurve<Vector3>
     {
         #region lifecycle
 
@@ -53,7 +108,7 @@ namespace SharpGLTF.Animations
             return _Sequence.ToDictionary(pair => pair.Key, pair => pair.Value);
         }
 
-        public IReadOnlyDictionary<float, (Vector3, Vector3, Vector3)> ToSplineCurve()
+        public IReadOnlyDictionary<float, (Vector3 TangentIn, Vector3 Value, Vector3 TangentOut)> ToSplineCurve()
         {
             throw new NotImplementedException();
         }
@@ -75,7 +130,7 @@ namespace SharpGLTF.Animations
     /// <summary>
     /// Defines a <see cref="Quaternion"/> curve sampler that can be sampled with STEP or LINEAR interpolations.
     /// </summary>
-    struct QuaternionLinearSampler : ICurveSampler<Quaternion>, IConvertibleCurve<Quaternion>
+    readonly struct QuaternionLinearSampler : ICurveSampler<Quaternion>, IConvertibleCurve<Quaternion>
     {
         #region lifecycle
 
@@ -119,7 +174,7 @@ namespace SharpGLTF.Animations
             return _Sequence.ToDictionary(pair => pair.Key, pair => pair.Value);
         }
 
-        public IReadOnlyDictionary<float, (Quaternion, Quaternion, Quaternion)> ToSplineCurve()
+        public IReadOnlyDictionary<float, (Quaternion TangentIn, Quaternion Value, Quaternion TangentOut)> ToSplineCurve()
         {
             throw new NotImplementedException();
         }
@@ -141,7 +196,7 @@ namespace SharpGLTF.Animations
     /// <summary>
     /// Defines a <see cref="Transforms.SparseWeight8"/> curve sampler that can be sampled with STEP or LINEAR interpolation.
     /// </summary>
-    struct SparseLinearSampler : ICurveSampler<Transforms.SparseWeight8>, IConvertibleCurve<Transforms.SparseWeight8>
+    readonly struct SparseLinearSampler : ICurveSampler<Transforms.SparseWeight8>, IConvertibleCurve<Transforms.SparseWeight8>
     {
         #region lifecycle
 
@@ -186,7 +241,7 @@ namespace SharpGLTF.Animations
             return _Sequence.ToDictionary(pair => pair.Key, pair => pair.Value);
         }
 
-        public IReadOnlyDictionary<float, (Transforms.SparseWeight8, Transforms.SparseWeight8, Transforms.SparseWeight8)> ToSplineCurve()
+        public IReadOnlyDictionary<float, (Transforms.SparseWeight8 TangentIn, Transforms.SparseWeight8 Value, Transforms.SparseWeight8 TangentOut)> ToSplineCurve()
         {
             throw new NotImplementedException();
         }
@@ -208,7 +263,7 @@ namespace SharpGLTF.Animations
     /// <summary>
     /// Defines a <see cref="float"/>[] curve sampler that can be sampled with STEP or LINEAR interpolations.
     /// </summary>
-    struct ArrayLinearSampler : ICurveSampler<float[]>, IConvertibleCurve<float[]>
+    readonly struct ArrayLinearSampler : ICurveSampler<float[]>, IConvertibleCurve<float[]>
     {
         #region lifecycle
 
@@ -252,7 +307,7 @@ namespace SharpGLTF.Animations
             return _Sequence.ToDictionary(pair => pair.Key, pair => pair.Value);
         }
 
-        public IReadOnlyDictionary<float, (float[], float[], float[])> ToSplineCurve()
+        public IReadOnlyDictionary<float, (float[] TangentIn, float[] Value, float[] TangentOut)> ToSplineCurve()
         {
             throw new NotImplementedException();
         }

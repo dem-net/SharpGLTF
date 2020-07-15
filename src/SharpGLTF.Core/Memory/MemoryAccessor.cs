@@ -3,13 +3,15 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 
+using BYTES = System.ArraySegment<System.Byte>;
+
 using DIMENSIONS = SharpGLTF.Schema2.DimensionType;
 using ENCODING = SharpGLTF.Schema2.EncodingType;
 
 namespace SharpGLTF.Memory
 {
     /// <summary>
-    /// Defines the pattern in which a <see cref="ArraySegment{Byte}"/> is accessed and decoded to meaningful values.
+    /// Defines the memory encoding pattern for an arbitrary <see cref="BYTES"/>.
     /// </summary>
     [System.Diagnostics.DebuggerDisplay("{_GetDebuggerDisplay(),nq}")]
     public struct MemoryAccessInfo
@@ -60,6 +62,17 @@ namespace SharpGLTF.Memory
             throw new NotImplementedException();
         }
 
+        public MemoryAccessInfo(string name, int byteOffset, int itemsCount, int byteStride, AttributeFormat format)
+        {
+            this.Name = name;
+            this.ByteOffset = byteOffset;
+            this.ItemsCount = itemsCount;
+            this.ByteStride = byteStride;
+            this.Dimensions = format.Dimensions;
+            this.Encoding = format.Encoding;
+            this.Normalized = format.Normalized;
+        }
+
         public MemoryAccessInfo(string name, int byteOffset, int itemsCount, int byteStride, DIMENSIONS dimensions, ENCODING encoding = ENCODING.FLOAT, Boolean normalized = false)
         {
             this.Name = name;
@@ -73,7 +86,7 @@ namespace SharpGLTF.Memory
 
         public MemoryAccessInfo Slice(int itemStart, int itemCount)
         {
-            var stride = GetRowByteLength();
+            var stride = _GetRowByteLength();
 
             var clone = this;
             clone.ByteOffset += itemStart * stride;
@@ -86,35 +99,51 @@ namespace SharpGLTF.Memory
 
         #region data
 
+        /// <summary>
+        /// If set, it can be used to identify the data with an attribute name: POSITION, NORMAL, etc
+        /// </summary>
         public String Name;
+
+        /// <summary>
+        /// number of bytes to advance to the beginning of the first item.
+        /// </summary>
         public int ByteOffset;
+
+        /// <summary>
+        /// Total number of items
+        /// </summary>
         public int ItemsCount;
+
+        /// <summary>
+        /// number of bytes to advance to the beginning of the next item
+        /// </summary>
         public int ByteStride;
+
+        /// <summary>
+        /// number of sub-elements of each item.
+        /// </summary>
         public DIMENSIONS Dimensions;
+
+        /// <summary>
+        /// byte encoding of sub-elements of each item.
+        /// </summary>
         public ENCODING Encoding;
+
+        /// <summary>
+        /// normalization of sub-elements of each item.
+        /// </summary>
         public Boolean Normalized;
 
         #endregion
 
-        #region API
+        #region properties
 
         /// <summary>
-        /// Gets the number of bytes of the current encoded Item, padded to 4 bytes.
+        /// number of bytes to advance to the next item.
         /// </summary>
-        public int PaddedByteLength => GetRowByteLength();
+        public int StepByteLength => _GetRowByteLength();
 
-        public int GetRowByteLength()
-        {
-            var xlen = Encoding.ByteLength();
-
-            if (Dimensions != Schema2.DimensionType.SCALAR || Name != "INDEX")
-            {
-                xlen *= this.Dimensions.DimCount();
-                xlen = xlen.WordPadded();
-            }
-
-            return Math.Max(ByteStride, xlen);
-        }
+        public int ItemByteLength => _GetItemByteLength();
 
         public Boolean IsValidVertexAttribute
         {
@@ -128,7 +157,7 @@ namespace SharpGLTF.Memory
                 if (this.ByteStride < 0) return false;
                 if (!this.ByteStride.IsMultipleOf(4)) return false;
 
-                if (this.ByteStride > 0 && this.ByteStride < this.PaddedByteLength) return false;
+                if (this.ByteStride > 0 && this.ByteStride < this.StepByteLength) return false;
 
                 return true;
             }
@@ -151,6 +180,28 @@ namespace SharpGLTF.Memory
             }
         }
 
+        #endregion
+
+        #region API
+
+        private int _GetItemByteLength()
+        {
+            var xlen = Encoding.ByteLength();
+
+            if (Dimensions != DIMENSIONS.SCALAR || Name != "INDEX")
+            {
+                xlen *= this.Dimensions.DimCount();
+                xlen = xlen.WordPadded();
+            }
+
+            return xlen;
+        }
+
+        private int _GetRowByteLength()
+        {
+            return Math.Max(ByteStride, _GetItemByteLength());
+        }
+
         public static int SetInterleavedInfo(MemoryAccessInfo[] attributes, int byteOffset, int itemsCount)
         {
             Guard.NotNull(attributes, nameof(attributes));
@@ -164,10 +215,10 @@ namespace SharpGLTF.Memory
                 a.ByteOffset = byteOffset;
                 a.ItemsCount = itemsCount;
 
-                var attributeStride = a.PaddedByteLength;
+                var step = a.StepByteLength;
 
-                byteStride += attributeStride;
-                byteOffset += attributeStride;
+                byteStride += step;
+                byteOffset += step;
 
                 attributes[i] = a;
             }
@@ -200,34 +251,11 @@ namespace SharpGLTF.Memory
 
         #region nested types
 
-        private static int _GetSortingScore(string attribute)
-        {
-            switch (attribute)
-            {
-                case "POSITION": return 0;
-                case "NORMAL": return 1;
-                case "TANGENT": return 2;
-
-                case "COLOR_0": return 10;
-                case "COLOR_1": return 11;
-                case "COLOR_2": return 12;
-                case "COLOR_3": return 13;
-
-                case "TEXCOORD_0": return 20;
-                case "TEXCOORD_1": return 21;
-                case "TEXCOORD_2": return 22;
-                case "TEXCOORD_3": return 23;
-
-                case "JOINTS_0": return 50;
-                case "JOINTS_1": return 51;
-                case "WEIGHTS_0": return 50;
-                case "WEIGHTS_1": return 51;
-                default: return 100;
-            }
-        }
-
         internal static IComparer<string> NameComparer { get; private set; } = new AttributeComparer();
 
+        /// <summary>
+        /// Comparer used to sort attribute names in a friendly order.
+        /// </summary>
         private class AttributeComparer : IComparer<String>
         {
             public int Compare(string x, string y)
@@ -237,28 +265,63 @@ namespace SharpGLTF.Memory
 
                 return xx.CompareTo(yy);
             }
+
+            private static int _GetSortingScore(string attribute)
+            {
+                switch (attribute)
+                {
+                    case "POSITION": return 0;
+                    case "NORMAL": return 1;
+                    case "TANGENT": return 2;
+
+                    case "COLOR_0": return 10;
+                    case "COLOR_1": return 11;
+                    case "COLOR_2": return 12;
+                    case "COLOR_3": return 13;
+
+                    case "TEXCOORD_0": return 20;
+                    case "TEXCOORD_1": return 21;
+                    case "TEXCOORD_2": return 22;
+                    case "TEXCOORD_3": return 23;
+
+                    case "JOINTS_0": return 50;
+                    case "JOINTS_1": return 51;
+                    case "WEIGHTS_0": return 50;
+                    case "WEIGHTS_1": return 51;
+                    default: return 100;
+                }
+            }
         }
 
         #endregion
     }
 
     /// <summary>
-    /// Wraps a <see cref="ArraySegment{Byte}"/> decoding it and exposing its content as arrays of different types.
+    /// Wraps a <see cref="BYTES"/> decoding it and exposing its content as arrays of different types.
     /// </summary>
-    [System.Diagnostics.DebuggerDisplay("{Attribute._GetDebuggerDisplay(),nq}")]
-    public sealed class MemoryAccessor
+    [System.Diagnostics.DebuggerDisplay("{_GetDebuggerDisplay(),nq}")]
+    public sealed partial class MemoryAccessor
     {
+        #region debug
+
+        internal string _GetDebuggerDisplay()
+        {
+            return _Slicer._GetDebuggerDisplay();
+        }
+
+        #endregion
+
         #region constructor
 
-        public MemoryAccessor(ArraySegment<Byte> data, MemoryAccessInfo info)
+        public MemoryAccessor(BYTES data, MemoryAccessInfo info)
         {
-            this._Attribute = info;
+            this._Slicer = info;
             this._Data = data;
         }
 
         public MemoryAccessor(MemoryAccessInfo info)
         {
-            this._Attribute = info;
+            this._Slicer = info;
             this._Data = default;
         }
 
@@ -266,10 +329,10 @@ namespace SharpGLTF.Memory
         {
             Guard.NotNull(bottom, nameof(bottom));
             Guard.NotNull(topValues, nameof(topValues));
-            Guard.IsTrue(bottom._Attribute.Dimensions == topValues._Attribute.Dimensions, nameof(topValues));
-            Guard.IsTrue(topKeys.Count <= bottom._Attribute.ItemsCount, nameof(topKeys));
-            Guard.IsTrue(topKeys.Count == topValues._Attribute.ItemsCount, nameof(topValues));
-            Guard.IsTrue(topKeys.All(item => item < (uint)bottom._Attribute.ItemsCount), nameof(topKeys));
+            Guard.IsTrue(bottom._Slicer.Dimensions == topValues._Slicer.Dimensions, nameof(topValues));
+            Guard.IsTrue(topKeys.Count <= bottom._Slicer.ItemsCount, nameof(topKeys));
+            Guard.IsTrue(topKeys.Count == topValues._Slicer.ItemsCount, nameof(topValues));
+            Guard.IsTrue(topKeys.All(item => item < (uint)bottom._Slicer.ItemsCount), nameof(topKeys));
 
             return new SparseArray<Single>(bottom.AsScalarArray(), topValues.AsScalarArray(), topKeys);
         }
@@ -278,10 +341,10 @@ namespace SharpGLTF.Memory
         {
             Guard.NotNull(bottom, nameof(bottom));
             Guard.NotNull(topValues, nameof(topValues));
-            Guard.IsTrue(bottom._Attribute.Dimensions == topValues._Attribute.Dimensions, nameof(topValues));
-            Guard.IsTrue(topKeys.Count <= bottom._Attribute.ItemsCount, nameof(topKeys));
-            Guard.IsTrue(topKeys.Count == topValues._Attribute.ItemsCount, nameof(topValues));
-            Guard.IsTrue(topKeys.All(item => item < (uint)bottom._Attribute.ItemsCount), nameof(topKeys));
+            Guard.IsTrue(bottom._Slicer.Dimensions == topValues._Slicer.Dimensions, nameof(topValues));
+            Guard.IsTrue(topKeys.Count <= bottom._Slicer.ItemsCount, nameof(topKeys));
+            Guard.IsTrue(topKeys.Count == topValues._Slicer.ItemsCount, nameof(topValues));
+            Guard.IsTrue(topKeys.All(item => item < (uint)bottom._Slicer.ItemsCount), nameof(topKeys));
 
             return new SparseArray<Vector2>(bottom.AsVector2Array(), topValues.AsVector2Array(), topKeys);
         }
@@ -290,10 +353,10 @@ namespace SharpGLTF.Memory
         {
             Guard.NotNull(bottom, nameof(bottom));
             Guard.NotNull(topValues, nameof(topValues));
-            Guard.IsTrue(bottom._Attribute.Dimensions == topValues._Attribute.Dimensions, nameof(topValues));
-            Guard.IsTrue(topKeys.Count <= bottom._Attribute.ItemsCount, nameof(topKeys));
-            Guard.IsTrue(topKeys.Count == topValues._Attribute.ItemsCount, nameof(topValues));
-            Guard.IsTrue(topKeys.All(item => item < (uint)bottom._Attribute.ItemsCount), nameof(topKeys));
+            Guard.IsTrue(bottom._Slicer.Dimensions == topValues._Slicer.Dimensions, nameof(topValues));
+            Guard.IsTrue(topKeys.Count <= bottom._Slicer.ItemsCount, nameof(topKeys));
+            Guard.IsTrue(topKeys.Count == topValues._Slicer.ItemsCount, nameof(topValues));
+            Guard.IsTrue(topKeys.All(item => item < (uint)bottom._Slicer.ItemsCount), nameof(topKeys));
 
             return new SparseArray<Vector3>(bottom.AsVector3Array(), topValues.AsVector3Array(), topKeys);
         }
@@ -302,10 +365,10 @@ namespace SharpGLTF.Memory
         {
             Guard.NotNull(bottom, nameof(bottom));
             Guard.NotNull(topValues, nameof(topValues));
-            Guard.IsTrue(bottom._Attribute.Dimensions == topValues._Attribute.Dimensions, nameof(topValues));
-            Guard.IsTrue(topKeys.Count <= bottom._Attribute.ItemsCount, nameof(topKeys));
-            Guard.IsTrue(topKeys.Count == topValues._Attribute.ItemsCount, nameof(topValues));
-            Guard.IsTrue(topKeys.All(item => item < (uint)bottom._Attribute.ItemsCount), nameof(topKeys));
+            Guard.IsTrue(bottom._Slicer.Dimensions == topValues._Slicer.Dimensions, nameof(topValues));
+            Guard.IsTrue(topKeys.Count <= bottom._Slicer.ItemsCount, nameof(topKeys));
+            Guard.IsTrue(topKeys.Count == topValues._Slicer.ItemsCount, nameof(topValues));
+            Guard.IsTrue(topKeys.All(item => item < (uint)bottom._Slicer.ItemsCount), nameof(topKeys));
 
             return new SparseArray<Vector4>(bottom.AsVector4Array(), topValues.AsVector4Array(), topKeys);
         }
@@ -314,10 +377,10 @@ namespace SharpGLTF.Memory
         {
             Guard.NotNull(bottom, nameof(bottom));
             Guard.NotNull(topValues, nameof(topValues));
-            Guard.IsTrue(bottom._Attribute.Dimensions == topValues._Attribute.Dimensions, nameof(topValues));
-            Guard.IsTrue(topKeys.Count <= bottom._Attribute.ItemsCount, nameof(topKeys));
-            Guard.IsTrue(topKeys.Count == topValues._Attribute.ItemsCount, nameof(topValues));
-            Guard.IsTrue(topKeys.All(item => item < (uint)bottom._Attribute.ItemsCount), nameof(topKeys));
+            Guard.IsTrue(bottom._Slicer.Dimensions == topValues._Slicer.Dimensions, nameof(topValues));
+            Guard.IsTrue(topKeys.Count <= bottom._Slicer.ItemsCount, nameof(topKeys));
+            Guard.IsTrue(topKeys.Count == topValues._Slicer.ItemsCount, nameof(topValues));
+            Guard.IsTrue(topKeys.All(item => item < (uint)bottom._Slicer.ItemsCount), nameof(topKeys));
 
             return new SparseArray<Vector4>(bottom.AsColorArray(defaultW), topValues.AsColorArray(defaultW), topKeys);
         }
@@ -327,91 +390,115 @@ namespace SharpGLTF.Memory
         #region data
 
         [System.Diagnostics.DebuggerBrowsable(System.Diagnostics.DebuggerBrowsableState.Never)]
-        private MemoryAccessInfo _Attribute;
+        private MemoryAccessInfo _Slicer;
 
         [System.Diagnostics.DebuggerBrowsable(System.Diagnostics.DebuggerBrowsableState.Never)]
-        private ArraySegment<Byte> _Data;
+        private BYTES _Data;
 
         #endregion
 
         #region properties
 
-        public MemoryAccessInfo Attribute => _Attribute;
+        public MemoryAccessInfo Attribute => _Slicer;
 
-        public ArraySegment<Byte> Data => _Data;
+        public BYTES Data => _Data;
 
         #endregion
 
         #region API
 
-        public void Update(ArraySegment<Byte> data, MemoryAccessInfo info)
+        public void Update(BYTES data, MemoryAccessInfo encoding)
         {
-            this._Attribute = info;
+            this._Slicer = encoding;
             this._Data = data;
         }
 
         public IntegerArray AsIntegerArray()
         {
-            Guard.IsTrue(_Attribute.IsValidIndexer, nameof(_Attribute));
-            Guard.IsTrue(_Attribute.Dimensions == DIMENSIONS.SCALAR, nameof(_Attribute));
-            return new IntegerArray(_Data, _Attribute.ByteOffset, _Attribute.ItemsCount, _Attribute.Encoding.ToIndex());
+            Guard.IsTrue(_Slicer.IsValidIndexer, nameof(_Slicer));
+            Guard.IsTrue(_Slicer.Dimensions == DIMENSIONS.SCALAR, nameof(_Slicer));
+            return new IntegerArray(_Data, _Slicer.ByteOffset, _Slicer.ItemsCount, _Slicer.Encoding.ToIndex());
         }
 
         public ScalarArray AsScalarArray()
         {
-            Guard.IsTrue(_Attribute.IsValidVertexAttribute, nameof(_Attribute));
-            Guard.IsTrue(_Attribute.Dimensions == DIMENSIONS.SCALAR, nameof(_Attribute));
-            return new ScalarArray(_Data, _Attribute.ByteOffset, _Attribute.ItemsCount, _Attribute.ByteStride, _Attribute.Encoding, _Attribute.Normalized);
+            Guard.IsTrue(_Slicer.IsValidVertexAttribute, nameof(_Slicer));
+            Guard.IsTrue(_Slicer.Dimensions == DIMENSIONS.SCALAR, nameof(_Slicer));
+            return new ScalarArray(_Data, _Slicer.ByteOffset, _Slicer.ItemsCount, _Slicer.ByteStride, _Slicer.Encoding, _Slicer.Normalized);
         }
 
         public Vector2Array AsVector2Array()
         {
-            Guard.IsTrue(_Attribute.IsValidVertexAttribute, nameof(_Attribute));
-            Guard.IsTrue(_Attribute.Dimensions == DIMENSIONS.VEC2, nameof(_Attribute));
-            return new Vector2Array(_Data, _Attribute.ByteOffset, _Attribute.ItemsCount, _Attribute.ByteStride, _Attribute.Encoding, _Attribute.Normalized);
+            Guard.IsTrue(_Slicer.IsValidVertexAttribute, nameof(_Slicer));
+            Guard.IsTrue(_Slicer.Dimensions == DIMENSIONS.VEC2, nameof(_Slicer));
+            return new Vector2Array(_Data, _Slicer.ByteOffset, _Slicer.ItemsCount, _Slicer.ByteStride, _Slicer.Encoding, _Slicer.Normalized);
         }
 
         public Vector3Array AsVector3Array()
         {
-            Guard.IsTrue(_Attribute.IsValidVertexAttribute, nameof(_Attribute));
-            Guard.IsTrue(_Attribute.Dimensions == DIMENSIONS.VEC3, nameof(_Attribute));
-            return new Vector3Array(_Data, _Attribute.ByteOffset, _Attribute.ItemsCount, _Attribute.ByteStride, _Attribute.Encoding, _Attribute.Normalized);
+            Guard.IsTrue(_Slicer.IsValidVertexAttribute, nameof(_Slicer));
+            Guard.IsTrue(_Slicer.Dimensions == DIMENSIONS.VEC3, nameof(_Slicer));
+            return new Vector3Array(_Data, _Slicer.ByteOffset, _Slicer.ItemsCount, _Slicer.ByteStride, _Slicer.Encoding, _Slicer.Normalized);
         }
 
         public Vector4Array AsVector4Array()
         {
-            Guard.IsTrue(_Attribute.IsValidVertexAttribute, nameof(_Attribute));
-            Guard.IsTrue(_Attribute.Dimensions == DIMENSIONS.VEC4, nameof(_Attribute));
-            return new Vector4Array(_Data, _Attribute.ByteOffset, _Attribute.ItemsCount, _Attribute.ByteStride, _Attribute.Encoding, _Attribute.Normalized);
+            Guard.IsTrue(_Slicer.IsValidVertexAttribute, nameof(_Slicer));
+            Guard.IsTrue(_Slicer.Dimensions == DIMENSIONS.VEC4, nameof(_Slicer));
+            return new Vector4Array(_Data, _Slicer.ByteOffset, _Slicer.ItemsCount, _Slicer.ByteStride, _Slicer.Encoding, _Slicer.Normalized);
         }
 
         public ColorArray AsColorArray(Single defaultW = 1)
         {
-            Guard.IsTrue(_Attribute.IsValidVertexAttribute, nameof(_Attribute));
-            Guard.IsTrue(_Attribute.Dimensions == DIMENSIONS.VEC3 || _Attribute.Dimensions == DIMENSIONS.VEC4, nameof(_Attribute));
-            return new ColorArray(_Data, _Attribute.ByteOffset, _Attribute.ItemsCount, _Attribute.ByteStride, _Attribute.Dimensions.DimCount(), _Attribute.Encoding, _Attribute.Normalized, defaultW);
+            Guard.IsTrue(_Slicer.IsValidVertexAttribute, nameof(_Slicer));
+            Guard.IsTrue(_Slicer.Dimensions == DIMENSIONS.VEC3 || _Slicer.Dimensions == DIMENSIONS.VEC4, nameof(_Slicer));
+            return new ColorArray(_Data, _Slicer.ByteOffset, _Slicer.ItemsCount, _Slicer.ByteStride, _Slicer.Dimensions.DimCount(), _Slicer.Encoding, _Slicer.Normalized, defaultW);
         }
 
         public QuaternionArray AsQuaternionArray()
         {
-            Guard.IsTrue(_Attribute.IsValidVertexAttribute, nameof(_Attribute));
-            Guard.IsTrue(_Attribute.Dimensions == DIMENSIONS.VEC4, nameof(_Attribute));
-            return new QuaternionArray(_Data, _Attribute.ByteOffset, _Attribute.ItemsCount, _Attribute.ByteStride, _Attribute.Encoding, _Attribute.Normalized);
+            Guard.IsTrue(_Slicer.IsValidVertexAttribute, nameof(_Slicer));
+            Guard.IsTrue(_Slicer.Dimensions == DIMENSIONS.VEC4, nameof(_Slicer));
+            return new QuaternionArray(_Data, _Slicer.ByteOffset, _Slicer.ItemsCount, _Slicer.ByteStride, _Slicer.Encoding, _Slicer.Normalized);
         }
 
         public Matrix4x4Array AsMatrix4x4Array()
         {
-            Guard.IsTrue(_Attribute.IsValidVertexAttribute, nameof(_Attribute));
-            Guard.IsTrue(_Attribute.Dimensions == DIMENSIONS.MAT4, nameof(_Attribute));
-            return new Matrix4x4Array(_Data, _Attribute.ByteOffset, _Attribute.ItemsCount, _Attribute.ByteStride, _Attribute.Encoding, _Attribute.Normalized);
+            Guard.IsTrue(_Slicer.IsValidVertexAttribute, nameof(_Slicer));
+            Guard.IsTrue(_Slicer.Dimensions == DIMENSIONS.MAT4, nameof(_Slicer));
+            return new Matrix4x4Array(_Data, _Slicer.ByteOffset, _Slicer.ItemsCount, _Slicer.ByteStride, _Slicer.Encoding, _Slicer.Normalized);
         }
 
         public MultiArray AsMultiArray(int dimensions)
         {
-            Guard.IsTrue(_Attribute.IsValidVertexAttribute, nameof(_Attribute));
-            Guard.IsTrue(_Attribute.Dimensions == DIMENSIONS.SCALAR, nameof(_Attribute));
-            Guard.IsTrue(_Attribute.ByteStride == 0, nameof(_Attribute));
-            return new MultiArray(_Data, _Attribute.ByteOffset, _Attribute.ItemsCount, _Attribute.ByteStride, dimensions, _Attribute.Encoding, _Attribute.Normalized);
+            Guard.IsTrue(_Slicer.IsValidVertexAttribute, nameof(_Slicer));
+            Guard.IsTrue(_Slicer.Dimensions == DIMENSIONS.SCALAR, nameof(_Slicer));
+            Guard.IsTrue(_Slicer.ByteStride == 0, nameof(_Slicer));
+            return new MultiArray(_Data, _Slicer.ByteOffset, _Slicer.ItemsCount, _Slicer.ByteStride, dimensions, _Slicer.Encoding, _Slicer.Normalized);
+        }
+
+        public IEnumerable<BYTES> GetItemsAsRawBytes()
+        {
+            var rowOffset = this._Slicer.ByteOffset;
+            var rowStride = this._Slicer.StepByteLength;
+            var itemSize = this._Slicer.Dimensions.DimCount() * _Slicer.Encoding.ByteLength();
+
+            for (int i = 0; i < this._Slicer.ItemsCount; ++i)
+            {
+                yield return this._Data.Slice((i * rowStride) + rowOffset, itemSize);
+            }
+        }
+
+        internal BYTES _GetBytes()
+        {
+            var o = this._Slicer.ByteOffset;
+            var l = this._Slicer.StepByteLength * this._Slicer.ItemsCount;
+
+            var data = _Data.Slice(o);
+
+            data = data.Slice(0, Math.Min(data.Count, l));
+
+            return data;
         }
 
         #endregion

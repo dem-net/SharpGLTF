@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using System.Text;
 
 using NUnit.Framework;
@@ -24,11 +25,22 @@ namespace SharpGLTF.Schema2.LoadAndSave
 
         #endregion
 
-        public void LoadWithCustomImageLoader()
+        [Test]
+        public void LoadEscapedUriModel()
         {
             TestContext.CurrentContext.AttachShowDirLink();
 
-            
+            var path = System.IO.Path.Combine(TestContext.CurrentContext.TestDirectory, "Assets\\white space.gltf");
+
+            var model = ModelRoot.Load(path);
+            Assert.NotNull(model);
+
+            model.AttachToCurrentTest("white space.glb");
+        }
+
+        public void LoadWithCustomImageLoader()
+        {
+            TestContext.CurrentContext.AttachShowDirLink();            
 
             // load Polly model
             var model = ModelRoot.Load(TestFiles.GetPollyFileModelPath());
@@ -40,7 +52,7 @@ namespace SharpGLTF.Schema2.LoadAndSave
             TestContext.CurrentContext.AttachShowDirLink();
 
             // load Polly model
-            var model = ModelRoot.Load(TestFiles.GetPollyFileModelPath());
+            var model = ModelRoot.Load(TestFiles.GetPollyFileModelPath(), Validation.ValidationMode.TryFix);
 
             Assert.NotNull(model);
 
@@ -80,9 +92,22 @@ namespace SharpGLTF.Schema2.LoadAndSave
 
                 TestContext.WriteLine($"Triangle {ap} {an} {bp} {bn} {cp} {cn}");
             }
+
+            // create a clone and apply a global axis transform.
+
+            var clonedModel = model.DeepClone();
+
+            var basisTransform
+                = Matrix4x4.CreateScale(1, 2, 1)
+                * Matrix4x4.CreateFromYawPitchRoll(1, 2, 3)                
+                * Matrix4x4.CreateTranslation(10,5,2);
+
+            clonedModel.ApplyBasisTransform(basisTransform);
+
+            clonedModel.AttachToCurrentTest("polly_out_transformed.glb");
         }
 
-        // [Test]
+        [Test]
         public void LoadUniVRM()
         {
             TestContext.CurrentContext.AttachShowDirLink();
@@ -91,6 +116,8 @@ namespace SharpGLTF.Schema2.LoadAndSave
             
             var model = ModelRoot.Load(path);
             Assert.NotNull(model);
+
+            var flattenExtensions = model.RetrieveUsedExtensions().ToArray();
 
             model.AttachToCurrentTest("AliceModel.glb");
         }
@@ -104,6 +131,29 @@ namespace SharpGLTF.Schema2.LoadAndSave
 
             var model = ModelRoot.Load(path);
             Assert.NotNull(model);
+        }
+
+        [Test]
+        public void LoadMouseModel()
+        {
+            // this model has several nodes with curve animations containing a single animation key,
+            // which is causing some problems to the interpolator.
+
+            TestContext.CurrentContext.AttachShowDirLink();
+            
+            var path = System.IO.Path.Combine(TestContext.CurrentContext.TestDirectory, "Assets\\SpecialCases\\mouse.glb");
+
+            var model = ModelRoot.Load(path);
+
+            var channel = model.LogicalAnimations[1].FindRotationSampler(model.LogicalNodes[5]);
+
+            var node5_R_00 = channel.CreateCurveSampler(true).GetPoint(0);
+            var node5_R_01 = channel.CreateCurveSampler(true).GetPoint(1);
+
+            Assert.AreEqual(node5_R_00, node5_R_01);
+
+            model.AttachToCurrentTest("mouse_00.obj", model.LogicalAnimations[1], 0f);
+            model.AttachToCurrentTest("mouse_01.obj", model.LogicalAnimations[1], 1f);
         }
 
         // these models show normal mapping but lack tangents, which are expected to be
@@ -126,7 +176,7 @@ namespace SharpGLTF.Schema2.LoadAndSave
             editableScene.AddRigidMesh(mesh, System.Numerics.Matrix4x4.Identity);
 
             model.AttachToCurrentTest("original.glb");
-            editableScene.ToSchema2().AttachToCurrentTest("WithTangents.glb");
+            editableScene.ToGltf2().AttachToCurrentTest("WithTangents.glb");
         }
     }
 }

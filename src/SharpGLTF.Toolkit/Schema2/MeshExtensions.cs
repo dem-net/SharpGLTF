@@ -21,7 +21,7 @@ namespace SharpGLTF.Schema2
             return root.CreateMeshes(mesh)[0];
         }
 
-        public static Mesh CreateMesh<TMaterial>(this ModelRoot root, Func<TMaterial, Material> materialEvaluator, IMeshBuilder<TMaterial> mesh)
+        public static Mesh CreateMesh<TMaterial>(this ModelRoot root, Converter<TMaterial, Material> materialEvaluator, IMeshBuilder<TMaterial> mesh)
         {
             return root.CreateMeshes<TMaterial>(materialEvaluator, mesh)[0];
         }
@@ -29,10 +29,10 @@ namespace SharpGLTF.Schema2
         public static IReadOnlyList<Mesh> CreateMeshes(this ModelRoot root, params IMeshBuilder<Materials.MaterialBuilder>[] meshBuilders)
         {
             // until this point, even if the multiple material instances used by the meshes have the same content definition,
-            // we must handling material equality by its object reference and nothing else, because Materials.MaterialBuilder
-            // is a mutable object, and we cannot guarantee two material instances will keep having the same content.
+            // we must handle material equality by its object reference and nothing else, because Materials.MaterialBuilder
+            // is a mutable object, and we cannot guarantee two material instances will keep having the same content over time.
 
-            // it is at this point where we can coalesce materials with the same content.
+            // * it is at this point where we can coalesce materials with the same content.
 
             // TODO: in order to coalesce MaterialBuilder instances with same content
             // an IMeshBuilder could wrap the incoming mesh, and merge primitives with shared meshes.
@@ -51,19 +51,19 @@ namespace SharpGLTF.Schema2
             return root.CreateMeshes(matFactory, meshBuilders);
         }
 
-        public static IReadOnlyList<Mesh> CreateMeshes<TMaterial>(this ModelRoot root, Func<TMaterial, Material> materialEvaluator, params IMeshBuilder<TMaterial>[] meshBuilders)
+        public static IReadOnlyList<Mesh> CreateMeshes<TMaterial>(this ModelRoot root, Converter<TMaterial, Material> materialConverter, params IMeshBuilder<TMaterial>[] meshBuilders)
         {
             Guard.NotNull(root, nameof(root));
-            Guard.NotNull(materialEvaluator, nameof(materialEvaluator));
+            Guard.NotNull(materialConverter, nameof(materialConverter));
             Guard.NotNull(meshBuilders, nameof(meshBuilders));
 
-            return root.CreateMeshes(materialEvaluator, true, meshBuilders);
+            return root.CreateMeshes(materialConverter, Scenes.SceneBuilderSchema2Settings.Default, meshBuilders);
         }
 
-        public static IReadOnlyList<Mesh> CreateMeshes<TMaterial>(this ModelRoot root, Func<TMaterial, Material> materialEvaluator, bool strided, params IMeshBuilder<TMaterial>[] meshBuilders)
+        public static IReadOnlyList<Mesh> CreateMeshes<TMaterial>(this ModelRoot root, Converter<TMaterial, Material> materialConverter, Scenes.SceneBuilderSchema2Settings settings, params IMeshBuilder<TMaterial>[] meshBuilders)
         {
             Guard.NotNull(root, nameof(root));
-            Guard.NotNull(materialEvaluator, nameof(materialEvaluator));
+            Guard.NotNull(materialConverter, nameof(materialConverter));
             Guard.NotNull(meshBuilders, nameof(meshBuilders));
             Guard.IsTrue(meshBuilders.Length == meshBuilders.Distinct().Count(), nameof(meshBuilders), "The collection has repeated meshes.");
 
@@ -75,12 +75,12 @@ namespace SharpGLTF.Schema2
                 .Where(item => !item.IsEmpty())
                 .Select(item => item.Material)
                 .Distinct()
-                .ToDictionary(m => m, m => materialEvaluator(m));
+                .ToDictionary(m => m, m => materialConverter(m));
 
             // create Schema2.Mesh collections for every gathered group.
 
             var srcMeshes = PackedMeshBuilder<TMaterial>
-                .CreatePackedMeshes(meshBuilders, strided)
+                .CreatePackedMeshes(meshBuilders, settings)
                 .ToList();
 
             PackedMeshBuilder<TMaterial>.MergeBuffers(srcMeshes);
@@ -263,13 +263,7 @@ namespace SharpGLTF.Schema2
         public static MeshPrimitive WithVertexAccessors<TVertex>(this MeshPrimitive primitive, IReadOnlyList<TVertex> vertices)
             where TVertex : IVertexBuilder
         {
-            var indices = vertices.Select(item => item.GetSkinning().GetWeights().MaxIndex);
-
-            var maxIndex = indices.Any() ? indices.Max() : 0;
-
-            var encoding = maxIndex < 256 ? Schema2.EncodingType.UNSIGNED_BYTE : EncodingType.UNSIGNED_SHORT;
-
-            var memAccessors = VertexUtils.CreateVertexMemoryAccessors(vertices, encoding);
+            var memAccessors = VertexUtils.CreateVertexMemoryAccessors(vertices, new PackedEncoding());
 
             return primitive.WithVertexAccessors(memAccessors);
         }
@@ -520,7 +514,7 @@ namespace SharpGLTF.Schema2
             if (vertexAccessors.ContainsKey("WEIGHTS_1")) dstColumns.Weights1 = vertexAccessors["WEIGHTS_1"].AsVector4Array();
         }
 
-        public static void AddMesh<TMaterial, TvG, TvM, TvS>(this MeshBuilder<TMaterial, TvG, TvM, TvS> meshBuilder, Mesh srcMesh, Func<Material, TMaterial> materialFunc)
+        public static void AddMesh<TMaterial, TvG, TvM, TvS>(this MeshBuilder<TMaterial, TvG, TvM, TvS> meshBuilder, Mesh srcMesh, Converter<Material, TMaterial> materialFunc)
             where TvG : struct, IVertexGeometry
             where TvM : struct, IVertexMaterial
             where TvS : struct, IVertexSkinning
@@ -562,7 +556,7 @@ namespace SharpGLTF.Schema2
         /// <param name="animation">The source <see cref="Animation"/> to evaluate.</param>
         /// <param name="time">A time point, in seconds, within <paramref name="animation"/>.</param>
         /// <returns>A new <see cref="MeshBuilder{TMaterial, TvG, TvM, TvS}"/> containing the evaluated geometry.</returns>
-        public static MeshBuilder<TMaterial, TvG, TvM, VertexEmpty> ToStaticMeshBuilder<TMaterial, TvG, TvM>(this Scene srcScene, Func<Material, TMaterial> materialFunc, Animation animation, float time)
+        public static MeshBuilder<TMaterial, TvG, TvM, VertexEmpty> ToStaticMeshBuilder<TMaterial, TvG, TvM>(this Scene srcScene, Converter<Material, TMaterial> materialFunc, Animation animation, float time)
             where TvG : struct, IVertexGeometry
             where TvM : struct, IVertexMaterial
         {
@@ -662,7 +656,7 @@ namespace SharpGLTF.Schema2
             return dstMesh;
         }
 
-        public static MeshBuilder<Materials.MaterialBuilder, TvG, TvM, TvS> ToMeshBuilder<TMaterial, TvG, TvM, TvS>(this IEnumerable<(VertexBuilder<TvG, TvM, TvS> A, VertexBuilder<TvG, TvM, TvS> B, VertexBuilder<TvG, TvM, TvS> C, TMaterial Material)> triangles, Func<TMaterial, Materials.MaterialBuilder> materialFunc)
+        public static MeshBuilder<Materials.MaterialBuilder, TvG, TvM, TvS> ToMeshBuilder<TMaterial, TvG, TvM, TvS>(this IEnumerable<(VertexBuilder<TvG, TvM, TvS> A, VertexBuilder<TvG, TvM, TvS> B, VertexBuilder<TvG, TvM, TvS> C, TMaterial Material)> triangles, Converter<TMaterial, Materials.MaterialBuilder> materialFunc)
             where TvG : struct, IVertexGeometry
             where TvM : struct, IVertexMaterial
             where TvS : struct, IVertexSkinning

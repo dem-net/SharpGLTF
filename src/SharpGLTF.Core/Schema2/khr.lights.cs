@@ -48,6 +48,12 @@ namespace SharpGLTF.Schema2
     [System.Diagnostics.DebuggerDisplay("{LightType} {Color} {Intensity} {Range}")]
     public sealed partial class PunctualLight
     {
+        #region constants
+
+        private const Double _rangeDefault = Double.PositiveInfinity;
+
+        #endregion
+
         #region lifecycle
 
         internal PunctualLight() { }
@@ -94,7 +100,7 @@ namespace SharpGLTF.Schema2
         /// to have reached zero. Supported only for point and spot lights. Must be > 0.
         /// When undefined, range is assumed to be infinite.
         /// </param>
-        public void SetColor(Vector3 color, float intensity = 1, float range = 0)
+        public void SetColor(Vector3 color, float intensity = 1, float range = float.PositiveInfinity)
         {
             this.Color = color;
             this.Intensity = intensity;
@@ -122,7 +128,7 @@ namespace SharpGLTF.Schema2
         /// <summary>
         /// Gets the type of light.
         /// </summary>
-        public PunctualLightType LightType => (PunctualLightType)Enum.Parse(typeof(PunctualLightType), _type, true);
+        public PunctualLightType LightType => string.IsNullOrEmpty(_type) ? PunctualLightType.Directional : (PunctualLightType)Enum.Parse(typeof(PunctualLightType), _type, true);
 
         /// <summary>
         /// Gets the Angle, in radians, from centre of spotlight where falloff begins.
@@ -163,8 +169,46 @@ namespace SharpGLTF.Schema2
         /// </summary>
         public Single Range
         {
-            get => (Single)_range.AsValue(0);
-            set => _range = LightType == PunctualLightType.Directional ? 0 : ((double)value).AsNullable(0, _rangeMinimum, float.MaxValue);
+            get => (Single)_range.AsValue(_rangeDefault);
+            set
+            {
+                if (LightType == PunctualLightType.Directional) { _range = null; return; }
+
+                _range = ((double)value).AsNullable(_rangeDefault, _rangeMinimum + 2e-07, float.MaxValue);
+            }
+        }
+
+        #endregion
+
+        #region API
+
+        protected override IEnumerable<ExtraProperties> GetLogicalChildren()
+        {
+            var children = base.GetLogicalChildren();
+
+            if (_spot != null) children = children.Concat(new[] { _spot });
+
+            return children;
+        }
+
+        #endregion
+
+        #region Validation
+
+        protected override void OnValidateReferences(Validation.ValidationContext validate)
+        {
+            validate.IsAnyOf("Type", _type, "directional", "point", "spot");
+
+            if (LightType == PunctualLightType.Spot) validate.IsDefined("Spot", _spot);
+
+            base.OnValidateReferences(validate);
+        }
+
+        protected override void OnValidateContent(Validation.ValidationContext validate)
+        {
+            validate.IsDefaultOrWithin(nameof(Intensity), _intensity, _intensityMinimum, float.MaxValue);
+
+            base.OnValidateContent(validate);
         }
 
         #endregion
@@ -175,13 +219,69 @@ namespace SharpGLTF.Schema2
         public Single InnerConeAngle
         {
             get => (Single)_innerConeAngle.AsValue(_innerConeAngleDefault);
-            set => _innerConeAngle = ((Double)value).AsNullable(_innerConeAngleDefault, _innerConeAngleMinimum, _innerConeAngleMaximum);
+            set => _innerConeAngle = value.AsNullable((Single)_innerConeAngleDefault, (Single)_innerConeAngleMinimum, (Single)_innerConeAngleMaximum);
         }
 
         public Single OuterConeAngle
         {
             get => (Single)_outerConeAngle.AsValue(_outerConeAngleDefault);
-            set => _outerConeAngle = ((Double)value).AsNullable(_outerConeAngleDefault, _outerConeAngleMinimum, _outerConeAngleMaximum);
+            set => _outerConeAngle = value.AsNullable((Single)_outerConeAngleDefault, (Single)_outerConeAngleMinimum, (Single)_outerConeAngleMaximum);
+        }
+
+        protected override void OnValidateContent(Validation.ValidationContext validate)
+        {
+            validate
+                .IsDefaultOrWithin(nameof(InnerConeAngle), InnerConeAngle, (Single)_innerConeAngleMinimum, (Single)_innerConeAngleMaximum)
+                .IsDefaultOrWithin(nameof(OuterConeAngle), OuterConeAngle, (Single)_outerConeAngleMinimum, (Single)_outerConeAngleMaximum)
+                .IsLess(nameof(InnerConeAngle), InnerConeAngle, OuterConeAngle);
+
+            base.OnValidateContent(validate);
+        }
+    }
+
+    partial class KHR_lights_punctualnodeextension
+    {
+        #pragma warning disable CA1801 // Review unused parameters
+        internal KHR_lights_punctualnodeextension(Node node) { }
+        #pragma warning restore CA1801 // Review unused parameters
+
+        public int LightIndex
+        {
+            get => _light;
+            set => _light = value;
+        }
+    }
+
+    partial class Node
+    {
+        /// <summary>
+        /// Gets or sets the <see cref="Schema2.PunctualLight"/> of this <see cref="Node"/>.
+        /// </summary>
+        /// <remarks>
+        /// This is part of <see href="https://github.com/KhronosGroup/glTF/tree/master/extensions/2.0/Khronos/KHR_lights_punctual"/> extension.
+        /// </remarks>
+        public PunctualLight PunctualLight
+        {
+            get
+            {
+                var ext = this.GetExtension<KHR_lights_punctualnodeextension>();
+                if (ext == null) return null;
+
+                return this.LogicalParent.LogicalPunctualLights[ext.LightIndex];
+            }
+            set
+            {
+                if (value == null) { this.RemoveExtensions<KHR_lights_punctualnodeextension>(); return; }
+
+                Guard.MustShareLogicalParent(this, value, nameof(value));
+
+                this.UsingExtension(typeof(KHR_lights_punctualnodeextension));
+
+                var ext = new KHR_lights_punctualnodeextension(this);
+                ext.LightIndex = value.LogicalIndex;
+
+                this.SetExtension(ext);
+            }
         }
     }
 
@@ -234,52 +334,6 @@ namespace SharpGLTF.Schema2
             }
 
             return ext.CreateLight(name, lightType);
-        }
-    }
-
-    partial class KHR_lights_punctualnodeextension
-    {
-        internal KHR_lights_punctualnodeextension(Node node)
-        {
-        }
-
-        public int LightIndex
-        {
-            get => _light;
-            set => _light = value;
-        }
-    }
-
-    partial class Node
-    {
-        /// <summary>
-        /// Gets or sets the <see cref="Schema2.PunctualLight"/> of this <see cref="Node"/>.
-        /// </summary>
-        /// <remarks>
-        /// This is part of <see href="https://github.com/KhronosGroup/glTF/tree/master/extensions/2.0/Khronos/KHR_lights_punctual"/> extension.
-        /// </remarks>
-        public PunctualLight PunctualLight
-        {
-            get
-            {
-                var ext = this.GetExtension<KHR_lights_punctualnodeextension>();
-                if (ext == null) return null;
-
-                return this.LogicalParent.LogicalPunctualLights[ext.LightIndex];
-            }
-            set
-            {
-                if (value == null) { this.RemoveExtensions<KHR_lights_punctualnodeextension>(); return; }
-
-                Guard.MustShareLogicalParent(this, value, nameof(value));
-
-                this.UsingExtension(typeof(KHR_lights_punctualnodeextension));
-
-                var ext = new KHR_lights_punctualnodeextension(this);
-                ext.LightIndex = value.LogicalIndex;
-
-                this.SetExtension(ext);
-            }
         }
     }
 }

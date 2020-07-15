@@ -5,6 +5,14 @@ using System.Linq;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 
+#if USINGMONOGAMEMODEL
+using MODELMESH = Microsoft.Xna.Framework.Graphics.ModelMesh;
+using MODELMESHPART = Microsoft.Xna.Framework.Graphics.ModelMeshPart;
+#else
+using MODELMESH = SharpGLTF.Runtime.ModelMeshReplacement;
+using MODELMESHPART = SharpGLTF.Runtime.ModelMeshPartReplacement;
+#endif
+
 namespace SharpGLTF.Runtime
 {
     public sealed class MonoGameModelInstance
@@ -50,13 +58,13 @@ namespace SharpGLTF.Runtime
         /// <param name="world">The world matrix.</param>
         public void Draw(Matrix projection, Matrix view, Matrix world)
         {
-            foreach (var d in _Controller.DrawableReferences)
+            foreach (var d in _Controller.DrawableInstances)
             {
-                Draw(_Template._Meshes[d.MeshIndex], projection, view, world, d.Transform);
+                Draw(_Template._Meshes[d.Template.LogicalMeshIndex], projection, view, world, d.Transform);
             }
         }
 
-        private void Draw(ModelMesh mesh, Matrix projectionXform, Matrix viewXform, Matrix worldXform, Transforms.IGeometryTransform modelXform)
+        private void Draw(MODELMESH mesh, Matrix projectionXform, Matrix viewXform, Matrix worldXform, Transforms.IGeometryTransform modelXform)
         {
             if (modelXform is Transforms.SkinnedTransform skinXform)
             {

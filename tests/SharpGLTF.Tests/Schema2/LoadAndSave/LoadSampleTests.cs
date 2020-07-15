@@ -26,7 +26,7 @@ namespace SharpGLTF.Schema2.LoadAndSave
 
         #region helpers
 
-        private static void _LoadModel(string f)
+        private static void _LoadModel(string f, bool tryFix = false)
         {
             var perf = System.Diagnostics.Stopwatch.StartNew();
 
@@ -34,7 +34,9 @@ namespace SharpGLTF.Schema2.LoadAndSave
 
             try
             {
-                model = ModelRoot.Load(f);
+                var settings = tryFix ? Validation.ValidationMode.TryFix : Validation.ValidationMode.Strict;
+
+                model = ModelRoot.Load(f, settings);
                 Assert.NotNull(model);
             }
             catch (Exception ex)
@@ -115,7 +117,7 @@ namespace SharpGLTF.Schema2.LoadAndSave
             {
                 TestContext.Progress.WriteLine(f);
 
-                _LoadModel(f);
+                _LoadModel(f, true);
             }
         }
 
@@ -247,8 +249,9 @@ namespace SharpGLTF.Schema2.LoadAndSave
         [TestCase("AnimatedMorphCube.glb")]
         [TestCase("AnimatedMorphSphere.glb")]
         [TestCase("CesiumMan.glb")]
-        [TestCase("Monster.glb")]
+        //[TestCase("Monster.glb")] // temporarily removed from khronos repo
         [TestCase("BrainStem.glb")]
+        [TestCase("Fox.glb")]
         public void LoadModelsWithAnimations(string path)
         {
             TestContext.CurrentContext.AttachShowDirLink();
@@ -315,7 +318,7 @@ namespace SharpGLTF.Schema2.LoadAndSave
             {
                 instance.SetAnimationFrame(anim.LogicalIndex, t);
 
-                var nodexform = instance.GetDrawableReference(0).Transform;
+                var nodexform = instance.GetDrawableInstance(0).Transform;
 
                 TestContext.WriteLine($"Animation at {t}");
 
@@ -343,6 +346,29 @@ namespace SharpGLTF.Schema2.LoadAndSave
             }
 
 
+        }
+
+
+
+        [Test]
+        public void FindDependencyFiles()
+        {
+            TestContext.CurrentContext.AttachShowDirLink();
+            TestContext.CurrentContext.AttachGltfValidatorLinks();
+
+            foreach (var f in TestFiles.GetBabylonJSValidModelsPaths())
+            {
+                TestContext.WriteLine(f);
+
+                var dependencies = ModelRoot.GetSatellitePaths(f);
+
+                foreach(var d in dependencies)
+                {
+                    TestContext.WriteLine($"    {d}");
+                }
+
+                TestContext.WriteLine();
+            }
         }
     }
 }

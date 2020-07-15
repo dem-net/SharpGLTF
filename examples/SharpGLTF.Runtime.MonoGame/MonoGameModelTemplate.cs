@@ -5,6 +5,14 @@ using System.Linq;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 
+#if USINGMONOGAMEMODEL
+using MODELMESH = Microsoft.Xna.Framework.Graphics.ModelMesh;
+using MODELMESHPART = Microsoft.Xna.Framework.Graphics.ModelMeshPart;
+#else
+using MODELMESH = SharpGLTF.Runtime.ModelMeshReplacement;
+using MODELMESHPART = SharpGLTF.Runtime.ModelMeshPartReplacement;
+#endif
+
 namespace SharpGLTF.Runtime
 {
     public class MonoGameModelTemplate
@@ -13,7 +21,7 @@ namespace SharpGLTF.Runtime
 
         public static MonoGameDeviceContent<MonoGameModelTemplate> LoadDeviceModel(GraphicsDevice device, string filePath)
         {
-            var model = Schema2.ModelRoot.Load(filePath);
+            var model = Schema2.ModelRoot.Load(filePath, Validation.ValidationMode.TryFix);
 
             return CreateDeviceModel(device, model);
         }
@@ -37,7 +45,7 @@ namespace SharpGLTF.Runtime
             return new MonoGameDeviceContent<MonoGameModelTemplate>(mdl, context.Disposables.ToArray());
         }
         
-        internal MonoGameModelTemplate(SceneTemplate[] scenes, int defaultSceneIndex, IReadOnlyDictionary<int, ModelMesh> meshes)
+        internal MonoGameModelTemplate(SceneTemplate[] scenes, int defaultSceneIndex, IReadOnlyDictionary<int, MODELMESH> meshes)
         {
             _Meshes = meshes;
             _Effects = _Meshes.Values
@@ -60,7 +68,7 @@ namespace SharpGLTF.Runtime
         /// <summary>
         /// Meshes shared by all the scenes.
         /// </summary>
-        internal readonly IReadOnlyDictionary<int, ModelMesh> _Meshes;
+        internal readonly IReadOnlyDictionary<int, MODELMESH> _Meshes;
 
         /// <summary>
         /// Effects shared by all the meshes.
@@ -109,9 +117,9 @@ namespace SharpGLTF.Runtime
 
             var bounds = default(BoundingSphere);
 
-            foreach (var d in instance.DrawableReferences)
+            foreach (var d in instance.DrawableInstances)
             {
-                var b = _Meshes[d.MeshIndex].BoundingSphere;
+                var b = _Meshes[d.Template.LogicalMeshIndex].BoundingSphere;
 
                 if (d.Transform is Transforms.RigidTransform statXform) b = b.Transform(statXform.WorldMatrix.ToXna());
 

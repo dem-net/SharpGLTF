@@ -1,20 +1,41 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using System.Text;
 
-using BYTES = System.ArraySegment<byte>;
-
+using IMAGEFILE = SharpGLTF.Memory.MemoryImage;
 using TEXLERP = SharpGLTF.Schema2.TextureInterpolationFilter;
 using TEXMIPMAP = SharpGLTF.Schema2.TextureMipMapFilter;
 using TEXWRAP = SharpGLTF.Schema2.TextureWrapMode;
 
 namespace SharpGLTF.Materials
 {
-    [System.Diagnostics.DebuggerDisplay("Texture {CoordinateSet} {MinFilter} {MagFilter} {WrapS} {WrapT} {Rotation} {Offset} {Scale}")]
+    [System.Diagnostics.DebuggerDisplay("{_DebuggerDisplay(),nq}")]
     public class TextureBuilder
     {
+        #region Debug
+
+        internal string _DebuggerDisplay()
+        {
+            var txt = "Texture ";
+            if (CoordinateSet != 0) txt += $" {CoordinateSet}ˢᵉᵗ";
+
+            if (MinFilter != TEXMIPMAP.DEFAULT) txt += $" {MinFilter}ᴹⁱⁿ";
+            if (MagFilter != TEXLERP.DEFAULT) txt += $" {MagFilter}ᴹᵃᵍ";
+
+            if (WrapS != TEXWRAP.REPEAT) txt += $" {WrapS}↔";
+            if (WrapT != TEXWRAP.REPEAT) txt += $" {WrapT}↕";
+
+            if (_PrimaryImageContent.IsValid) txt += $" {_PrimaryImageContent.DisplayText}";
+            if (_FallbackImageContent.IsValid) txt += $" => {_FallbackImageContent.DisplayText}";
+
+            return txt;
+        }
+
+        #endregion
+
         #region lifecycle
 
         internal TextureBuilder(ChannelBuilder parent)
@@ -28,10 +49,17 @@ namespace SharpGLTF.Materials
 
         #region data
 
+        [System.Diagnostics.DebuggerBrowsable(System.Diagnostics.DebuggerBrowsableState.Never)]
         private readonly ChannelBuilder _Parent;
 
-        private BYTES _PrimaryImageContent;
-        private BYTES _FallbackImageContent;
+        [System.Diagnostics.DebuggerBrowsable(System.Diagnostics.DebuggerBrowsableState.Never)]
+        private IMAGEFILE _PrimaryImageContent;
+
+        [System.Diagnostics.DebuggerBrowsable(System.Diagnostics.DebuggerBrowsableState.Never)]
+        private IMAGEFILE _FallbackImageContent;
+
+        [System.Diagnostics.DebuggerBrowsable(System.Diagnostics.DebuggerBrowsableState.Never)]
+        private TextureTransformBuilder _Transform;
 
         public int CoordinateSet { get; set; } = 0;
 
@@ -43,17 +71,13 @@ namespace SharpGLTF.Materials
 
         public TEXWRAP WrapT { get; set; } = TEXWRAP.REPEAT;
 
-        private TextureTransformBuilder _Transform;
-
-        public static bool AreEqual(TextureBuilder a, TextureBuilder b)
+        public static bool AreEqualByContent(TextureBuilder a, TextureBuilder b)
         {
             #pragma warning disable IDE0041 // Use 'is null' check
             if (Object.ReferenceEquals(a, b)) return true;
             if (Object.ReferenceEquals(a, null)) return false;
             if (Object.ReferenceEquals(b, null)) return false;
             #pragma warning restore IDE0041 // Use 'is null' check
-
-            if (!Object.ReferenceEquals(a._Parent, b._Parent)) return false;
 
             if (a.CoordinateSet != b.CoordinateSet) return false;
 
@@ -62,19 +86,12 @@ namespace SharpGLTF.Materials
             if (a.WrapS != b.WrapS) return false;
             if (a.WrapT != b.WrapT) return false;
 
-            if (!_AreArraysContentEqual(a._PrimaryImageContent, b._PrimaryImageContent)) return false;
-            if (!_AreArraysContentEqual(a._FallbackImageContent, b._FallbackImageContent)) return false;
+            if (!IMAGEFILE.AreEqual(a._PrimaryImageContent, b._PrimaryImageContent)) return false;
+            if (!IMAGEFILE.AreEqual(a._FallbackImageContent, b._FallbackImageContent)) return false;
 
-            if (TextureTransformBuilder.AreEqual(a._Transform, b._Transform)) return false;
+            if (!TextureTransformBuilder.AreEqualByContent(a._Transform, b._Transform)) return false;
 
             return true;
-        }
-
-        private static bool _AreArraysContentEqual(BYTES a, BYTES b)
-        {
-            if (a.Equals(b)) return true;
-
-            return Enumerable.SequenceEqual(a, b);
         }
 
         public static int GetContentHashCode(TextureBuilder x)
@@ -87,8 +104,8 @@ namespace SharpGLTF.Materials
             h ^= x.WrapS.GetHashCode();
             h ^= x.WrapT.GetHashCode();
 
-            h ^= x._PrimaryImageContent.GetContentHashCode(16);
-            h ^= x._FallbackImageContent.GetContentHashCode(16);
+            h ^= x._PrimaryImageContent.GetHashCode();
+            h ^= x._FallbackImageContent.GetHashCode();
 
             return h;
         }
@@ -101,7 +118,7 @@ namespace SharpGLTF.Materials
         /// Gets or sets the default image bytes to use by this <see cref="TextureBuilder"/>,
         /// Supported formats are: PNG, JPG, DDS and WEBP
         /// </summary>
-        public BYTES PrimaryImageContent
+        public IMAGEFILE PrimaryImage
         {
             get => _PrimaryImageContent;
             set => WithPrimaryImage(value);
@@ -111,7 +128,7 @@ namespace SharpGLTF.Materials
         /// Gets or sets the fallback image bytes to use by this <see cref="TextureBuilder"/>,
         /// Supported formats are: PNG, JPG.
         /// </summary>
-        public BYTES FallbackImageContent
+        public IMAGEFILE FallbackImage
         {
             get => _FallbackImageContent;
             set => WithFallbackImage(value);
@@ -125,28 +142,29 @@ namespace SharpGLTF.Materials
 
         #region API
 
-        public TextureBuilder WithCoordinateSet(int cset) { CoordinateSet = cset; return this; }
-
-        [Obsolete("Use WithPrimaryImage instead.")]
-        public TextureBuilder WithImage(string imagePath) { return WithPrimaryImage(imagePath); }
-
-        [Obsolete("Use WithPrimaryImage instead,")]
-        public TextureBuilder WithImage(BYTES image) { return WithPrimaryImage(image); }
-
-        public TextureBuilder WithPrimaryImage(string imagePath)
+        internal void CopyTo(TextureBuilder other)
         {
-            var primary = System.IO.File
-                .ReadAllBytes(imagePath)
-                .Slice(0);
+            other._PrimaryImageContent = this._PrimaryImageContent;
+            other._FallbackImageContent = this._FallbackImageContent;
 
-            return WithPrimaryImage(primary);
+            other.CoordinateSet = this.CoordinateSet;
+
+            other.MinFilter = this.MinFilter;
+            other.MagFilter = this.MagFilter;
+            other.WrapS = this.WrapS;
+            other.WrapT = this.WrapT;
+
+            var xform = new TextureTransformBuilder(this._Transform);
+            other._Transform = xform.IsDefault ? null : xform;
         }
 
-        public TextureBuilder WithPrimaryImage(BYTES image)
+        public TextureBuilder WithCoordinateSet(int cset) { CoordinateSet = cset; return this; }
+
+        public TextureBuilder WithPrimaryImage(IMAGEFILE image)
         {
-            if (image.Count > 0)
+            if (!image.IsEmpty)
             {
-                Guard.IsTrue(image._IsImage(), nameof(image), "Must be JPG, PNG, DDS or WEBP");
+                Guard.IsTrue(image.IsValid, nameof(image), "Must be JPG, PNG, DDS or WEBP");
             }
             else
             {
@@ -157,20 +175,11 @@ namespace SharpGLTF.Materials
             return this;
         }
 
-        public TextureBuilder WithFallbackImage(string imagePath)
+        public TextureBuilder WithFallbackImage(IMAGEFILE image)
         {
-            var primary = System.IO.File
-                .ReadAllBytes(imagePath)
-                .Slice(0);
-
-            return WithFallbackImage(primary);
-        }
-
-        public TextureBuilder WithFallbackImage(BYTES image)
-        {
-            if (image.Count > 0)
+            if (!image.IsEmpty)
             {
-                Guard.IsTrue(image._IsJpgImage() || image._IsPngImage(), nameof(image), "Must be JPG or PNG");
+                Guard.IsTrue(image.IsJpg || image.IsPng, nameof(image), "Must be JPG or PNG");
             }
             else
             {
@@ -208,7 +217,7 @@ namespace SharpGLTF.Materials
 
         #endregion
 
-        #region support types
+        #region nested types
 
         sealed class _ContentComparer : IEqualityComparer<TextureBuilder>
         {
@@ -216,39 +225,19 @@ namespace SharpGLTF.Materials
 
             public bool Equals(TextureBuilder x, TextureBuilder y)
             {
-                return TextureBuilder.AreEqual(x, y);
+                return AreEqualByContent(x, y);
             }
 
             public int GetHashCode(TextureBuilder obj)
             {
-                return TextureBuilder.GetContentHashCode(obj);
+                return GetContentHashCode(obj);
             }
-        }
-
-        #endregion
-
-        #region image utilities
-
-        /// <summary>
-        /// Checks if <paramref name="data"/> represents a stream of an encoded image.
-        /// </summary>
-        /// <param name="data">A stream of bytes.</param>
-        /// <param name="extension">
-        /// An image format, valid values are:
-        /// - PNG
-        /// - JPG
-        /// - DDS
-        /// - WEBP
-        /// </param>
-        /// <returns>True if <paramref name="data"/> is an image.</returns>
-        public static bool IsImage(ArraySegment<Byte> data, string extension)
-        {
-            return data._IsImage(extension);
         }
 
         #endregion
     }
 
+    [System.Diagnostics.DebuggerDisplay("Transform 𝐒:{Scale} 𝐑:{Rotation} 𝚻:{Offset}")]
     public class TextureTransformBuilder
     {
         #region lifecycle
@@ -259,6 +248,14 @@ namespace SharpGLTF.Materials
             this.Scale = scale;
             this.Rotation = rotation;
             this.CoordinateSetOverride = coordSetOverride;
+        }
+
+        internal TextureTransformBuilder(TextureTransformBuilder other)
+        {
+            this.Offset = other?.Offset ?? Vector2.Zero;
+            this.Scale = other?.Scale ?? Vector2.One;
+            this.Rotation = other?.Rotation ?? 0;
+            this.CoordinateSetOverride = other?.CoordinateSetOverride;
         }
 
         #endregion
@@ -277,8 +274,11 @@ namespace SharpGLTF.Materials
         /// </summary>
         public int? CoordinateSetOverride { get; set; }
 
-        public static bool AreEqual(TextureTransformBuilder a, TextureTransformBuilder b)
+        public static bool AreEqualByContent(TextureTransformBuilder a, TextureTransformBuilder b)
         {
+            if (a != null && a.IsDefault) a = null;
+            if (b != null && b.IsDefault) b = null;
+
             #pragma warning disable IDE0041 // Use 'is null' check
             if (Object.ReferenceEquals(a, b)) return true;
             if (Object.ReferenceEquals(a, null)) return false;
@@ -306,7 +306,7 @@ namespace SharpGLTF.Materials
                 if (Scale != Vector2.One) return false;
                 if (Rotation != 0) return false;
                 if (CoordinateSetOverride.HasValue) return false;
-                return false;
+                return true;
             }
         }
 

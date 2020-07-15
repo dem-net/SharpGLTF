@@ -10,15 +10,20 @@ namespace SharpGLTF.Schema2
     /// </summary>
     static class _Schema2Extensions
     {
-        #region base64
+        #region morph weights
 
-        internal static Byte[] _TryParseBase64Unchecked(this string uri, string prefix)
+        public static void SetMorphWeights(this IList<Double> list, int maxCount, Transforms.SparseWeight8 weights)
         {
-            if (uri == null) return null;
-            if (!uri.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return null;
+            while (list.Count > maxCount) list.RemoveAt(list.Count - 1);
+            while (list.Count < maxCount) list.Add(0);
 
-            var content = uri.Substring(prefix.Length);
-            return Convert.FromBase64String(content);
+            if (list.Count > 0)
+            {
+                foreach (var (index, weight) in weights.GetIndexedWeights())
+                {
+                    list[index] = weight;
+                }
+            }
         }
 
         #endregion
@@ -57,8 +62,8 @@ namespace SharpGLTF.Schema2
         {
             if (value.Equals(defval)) return null;
 
-            value = Vector2.Min(value, minval);
-            value = Vector2.Max(value, maxval);
+            value = Vector2.Min(value, maxval);
+            value = Vector2.Max(value, minval);
 
             return value.Equals(defval) ? (Vector2?)null : value;
         }
@@ -67,8 +72,8 @@ namespace SharpGLTF.Schema2
         {
             if (value.Equals(defval)) return null;
 
-            value = Vector3.Min(value, minval);
-            value = Vector3.Max(value, maxval);
+            value = Vector3.Min(value, maxval);
+            value = Vector3.Max(value, minval);
 
             return value.Equals(defval) ? (Vector3?)null : value;
         }
@@ -77,8 +82,8 @@ namespace SharpGLTF.Schema2
         {
             if (value.Equals(defval)) return (Vector4?)null;
 
-            value = Vector4.Min(value, minval);
-            value = Vector4.Max(value, maxval);
+            value = Vector4.Min(value, maxval);
+            value = Vector4.Max(value, minval);
 
             return value.Equals(defval) ? (Vector4?)null : value;
         }

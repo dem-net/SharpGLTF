@@ -4,6 +4,8 @@ using System.Linq;
 using System.Text;
 using SharpGLTF.Memory;
 
+using BYTES = System.ArraySegment<byte>;
+
 namespace SharpGLTF.Geometry
 {
     class PackedBuffer
@@ -16,7 +18,7 @@ namespace SharpGLTF.Geometry
             {
                 if (_Accessors.Count == 0) return null;
 
-                return _Accessors[0].Attribute.PaddedByteLength;
+                return _Accessors[0].Attribute.StepByteLength;
             }
         }
 
@@ -29,7 +31,7 @@ namespace SharpGLTF.Geometry
                 // ensure that all accessors have the same byte stride
                 if (this.ByteStride.HasValue)
                 {
-                    var astride = a.Attribute.PaddedByteLength;
+                    var astride = a.Attribute.StepByteLength;
                     Guard.IsTrue(this.ByteStride.Value == astride, nameof(accessors));
                 }
 
@@ -51,7 +53,7 @@ namespace SharpGLTF.Geometry
 
             int offset = 0;
 
-            var dstOffsets = new Dictionary<ArraySegment<Byte>, int>();
+            var dstOffsets = new Dictionary<BYTES, int>();
 
             foreach (var src in srcBuffers)
             {
@@ -63,7 +65,7 @@ namespace SharpGLTF.Geometry
                 offset += src.Count;
             }
 
-            var dstBuffer = new ArraySegment<Byte>(array);
+            var dstBuffer = new BYTES(array);
 
             foreach (var a in _Accessors)
             {

@@ -2,9 +2,12 @@
 using System.Collections.Generic;
 using System.Linq;
 
-using Newtonsoft.Json;
+// using Newtonsoft.Json;
+using System.Text.Json;
 
 using SharpGLTF.IO;
+
+using JsonToken = System.Text.Json.JsonTokenType;
 
 namespace SharpGLTF.Schema2
 {
@@ -119,27 +122,32 @@ namespace SharpGLTF.Schema2
 
         #region validation
 
-        protected override void OnValidateReferences(Validation.ValidationContext result)
+        protected override void OnValidateReferences(Validation.ValidationContext validate)
         {
-            base.OnValidateReferences(result);
+            base.OnValidateReferences(validate);
 
-            foreach (var ext in this.Extensions) ext.ValidateReferences(result);
+            foreach (var lc in this.GetLogicalChildren())
+            {
+                lc.ValidateReferences(validate);
+            }
 
-            if (this._extras is JsonSerializable js) js.ValidateReferences(result);
+            foreach (var ext in this.Extensions) ext.ValidateReferences(validate);
+
+            if (this._extras is JsonSerializable js) js.ValidateReferences(validate);
         }
 
-        protected override void OnValidate(Validation.ValidationContext result)
+        protected override void OnValidateContent(Validation.ValidationContext validate)
         {
-            base.OnValidate(result);
+            base.OnValidateContent(validate);
 
-            foreach (var ext in this.Extensions) ext.Validate(result);
-
-            if (this._extras is JsonSerializable js) js.Validate(result);
-
-            if (this._extras != null)
+            foreach (var lc in this.GetLogicalChildren())
             {
-                result.CheckSchemaIsJsonSerializable("Extras", this._extras);
+                lc.ValidateContent(validate);
             }
+
+            if (this._extras is JsonSerializable js) js.ValidateContent(validate);
+
+            if (this._extras != null) validate.IsJsonSerializable("Extras", this._extras);
         }
 
         #endregion
@@ -147,10 +155,10 @@ namespace SharpGLTF.Schema2
         #region serialization API
 
         /// <summary>
-        /// Writes the properties of the current instance to a <see cref="JsonWriter"/>.
+        /// Writes the properties of the current instance to a <see cref="Utf8JsonWriter"/>.
         /// </summary>
         /// <param name="writer">The target writer.</param>
-        protected override void SerializeProperties(JsonWriter writer)
+        protected override void SerializeProperties(Utf8JsonWriter writer)
         {
             if (_extensions.Count > 0)
             {
@@ -191,26 +199,25 @@ namespace SharpGLTF.Schema2
         }
 
         /// <summary>
-        /// Reads the properties of the current instance from a <see cref="JsonReader"/>.
+        /// Reads the properties of the current instance from a <see cref="Utf8JsonReader"/>.
         /// </summary>
         /// <param name="property">The name of the property.</param>
         /// <param name="reader">The source reader.</param>
-        protected override void DeserializeProperty(string property, JsonReader reader)
+        protected override void DeserializeProperty(string property, ref Utf8JsonReader reader)
         {
             Guard.NotNullOrEmpty(property, nameof(property));
-            Guard.NotNull(reader, nameof(reader));
 
             switch (property)
             {
-                case "extensions": _DeserializeExtensions(this, reader, _extensions); break;
+                case "extensions": _DeserializeExtensions(this, ref reader, _extensions); break;
 
-                case "extras": _extras = DeserializeUnknownObject(reader); break;
+                case "extras": _extras = DeserializeUnknownObject(ref reader); break;
 
                 default: reader.Skip(); break;
             }
         }
 
-        private static void _DeserializeExtensions(JsonSerializable parent, JsonReader reader, IList<JsonSerializable> extensions)
+        private static void _DeserializeExtensions(JsonSerializable parent, ref Utf8JsonReader reader, IList<JsonSerializable> extensions)
         {
             reader.Read();
 
@@ -218,13 +225,13 @@ namespace SharpGLTF.Schema2
             {
                 while (reader.Read() && reader.TokenType != JsonToken.EndObject)
                 {
-                    var key = reader.Value as String;
+                    var key = reader.GetString();
 
                     var val = ExtensionsFactory.Create(parent, key);
 
                     if (val == null) val = new UnknownNode(key);
 
-                    val.Deserialize(reader);
+                    val.Deserialize(ref reader);
                     extensions.Add(val);
                     continue;
                 }

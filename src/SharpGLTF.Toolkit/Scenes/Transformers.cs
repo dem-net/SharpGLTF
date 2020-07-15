@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using System.Text;
 
 using MESHBUILDER = SharpGLTF.Geometry.IMeshBuilder<SharpGLTF.Materials.MaterialBuilder>;
 
@@ -12,6 +13,13 @@ namespace SharpGLTF.Scenes
     /// </summary>
     public abstract class ContentTransformer
     {
+        #region debug
+
+        [System.Diagnostics.DebuggerBrowsable(System.Diagnostics.DebuggerBrowsableState.Never)]
+        private string _DebugName => string.IsNullOrWhiteSpace(Name) ? "*" : Name;
+
+        #endregion
+
         #region lifecycle
 
         protected ContentTransformer(Object content)
@@ -23,13 +31,21 @@ namespace SharpGLTF.Scenes
             _Content = content;
         }
 
-        public abstract ContentTransformer DeepClone();
+        public abstract ContentTransformer DeepClone(DeepCloneContext args);
 
         protected ContentTransformer(ContentTransformer other)
         {
             Guard.NotNull(other, nameof(other));
 
-            this._Content = other._Content;
+            if (other._Content is ICloneable cloneable)
+            {
+                this._Content = cloneable.Clone();
+            }
+            else
+            {
+                this._Content = other._Content;
+            }
+
             this._Morphings = other._Morphings?.Clone();
         }
 
@@ -37,13 +53,17 @@ namespace SharpGLTF.Scenes
 
         #region data
 
+        [System.Diagnostics.DebuggerBrowsable(System.Diagnostics.DebuggerBrowsableState.Never)]
         private Object _Content;
 
+        [System.Diagnostics.DebuggerBrowsable(System.Diagnostics.DebuggerBrowsableState.Never)]
         private Animations.AnimatableProperty<Transforms.SparseWeight8> _Morphings;
 
         #endregion
 
         #region properties
+
+        public abstract String Name { get; }
 
         public Object Content => _Content;
 
@@ -81,20 +101,44 @@ namespace SharpGLTF.Scenes
             return UseMorphing().UseTrackBuilder(animationTrack);
         }
 
+        public abstract Matrix4x4 GetPoseWorldMatrix();
+
+        #endregion
+
+        #region nestedTypes
+
+        public readonly struct DeepCloneContext
+        {
+            public DeepCloneContext(IReadOnlyDictionary<NodeBuilder, NodeBuilder> nmap)
+            {
+                _NodeMap = nmap;
+            }
+
+            private readonly IReadOnlyDictionary<NodeBuilder, NodeBuilder> _NodeMap;
+
+            public NodeBuilder GetNode(NodeBuilder node)
+            {
+                if (_NodeMap == null) return node;
+                return _NodeMap.TryGetValue(node, out NodeBuilder clone) ? clone : node;
+            }
+        }
+
         #endregion
     }
 
     /// <summary>
     /// Applies a fixed <see cref="Matrix4x4"/> transform to the underlaying content.
     /// </summary>
+    [System.Diagnostics.DebuggerDisplay("Fixed Node[{_DebugName,nq}] = {Content}")]
     public partial class FixedTransformer : ContentTransformer
     {
         #region lifecycle
 
-        internal FixedTransformer(Object content, Matrix4x4 xform)
+        internal FixedTransformer(Object content, Matrix4x4 xform, string nodeName = null)
             : base(content)
         {
             _WorldTransform = xform;
+            _NodeName = nodeName;
         }
 
         protected FixedTransformer(FixedTransformer other)
@@ -102,10 +146,11 @@ namespace SharpGLTF.Scenes
         {
             Guard.NotNull(other, nameof(other));
 
+            this._NodeName = other._NodeName;
             this._WorldTransform = other._WorldTransform;
         }
 
-        public override ContentTransformer DeepClone()
+        public override ContentTransformer DeepClone(DeepCloneContext args)
         {
             return new FixedTransformer(this);
         }
@@ -114,13 +159,19 @@ namespace SharpGLTF.Scenes
 
         #region data
 
+        [System.Diagnostics.DebuggerBrowsable(System.Diagnostics.DebuggerBrowsableState.Never)]
+        private String _NodeName;
+
+        [System.Diagnostics.DebuggerBrowsable(System.Diagnostics.DebuggerBrowsableState.Never)]
         private Matrix4x4 _WorldTransform;
 
         #endregion
 
         #region properties
 
-        public Matrix4x4 WorldTransform
+        public override String Name => _NodeName;
+
+        public Matrix4x4 WorldMatrix
         {
             get => _WorldTransform;
             set => _WorldTransform = value;
@@ -132,12 +183,16 @@ namespace SharpGLTF.Scenes
 
         public override NodeBuilder GetArmatureRoot() { return null; }
 
+        public override Matrix4x4 GetPoseWorldMatrix() => WorldMatrix;
+
         #endregion
+
     }
 
     /// <summary>
     /// Applies the transform of a single <see cref="NodeBuilder"/> to the underlaying content.
     /// </summary>
+    [System.Diagnostics.DebuggerDisplay("Rigid Node[{_DebugName,nq}] = {Content}")]
     public partial class RigidTransformer : ContentTransformer
     {
         #region lifecycle
@@ -148,28 +203,31 @@ namespace SharpGLTF.Scenes
             _Node = node;
         }
 
-        protected RigidTransformer(RigidTransformer other)
+        protected RigidTransformer(RigidTransformer other, DeepCloneContext args)
             : base(other)
         {
             Guard.NotNull(other, nameof(other));
 
-            this._Node = other._Node;
+            this._Node = args.GetNode(other._Node);
         }
 
-        public override ContentTransformer DeepClone()
+        public override ContentTransformer DeepClone(DeepCloneContext args)
         {
-            return new RigidTransformer(this);
+            return new RigidTransformer(this, args);
         }
 
         #endregion
 
         #region data
 
+        [System.Diagnostics.DebuggerBrowsable(System.Diagnostics.DebuggerBrowsableState.Never)]
         private NodeBuilder _Node;
 
         #endregion
 
         #region properties
+
+        public override String Name => _Node.Name;
 
         public NodeBuilder Transform
         {
@@ -183,50 +241,76 @@ namespace SharpGLTF.Scenes
 
         public override NodeBuilder GetArmatureRoot() { return _Node.Root; }
 
+        public override Matrix4x4 GetPoseWorldMatrix() => Transform.WorldMatrix;
+
         #endregion
     }
 
     /// <summary>
     /// Applies the transforms of many <see cref="NodeBuilder"/> to the underlaying content.
     /// </summary>
+    [System.Diagnostics.DebuggerDisplay("Skinned Node[{_DebugName,nq}] = {Content}")]
     public partial class SkinnedTransformer : ContentTransformer
     {
         #region lifecycle
 
-        internal SkinnedTransformer(MESHBUILDER mesh, Matrix4x4 meshWorldMatrix, NodeBuilder[] joints)
+        internal SkinnedTransformer(MESHBUILDER mesh, Matrix4x4 meshWorldMatrix, NodeBuilder[] joints, string nodeName = null)
             : base(mesh)
         {
+            _NodeName = nodeName;
             SetJoints(meshWorldMatrix, joints);
         }
 
-        internal SkinnedTransformer(MESHBUILDER mesh, (NodeBuilder Joint, Matrix4x4 InverseBindMatrix)[] joints)
+        internal SkinnedTransformer(MESHBUILDER mesh, (NodeBuilder Joint, Matrix4x4 InverseBindMatrix)[] joints, string nodeName = null)
             : base(mesh)
         {
+            _NodeName = nodeName;
             SetJoints(joints);
         }
 
-        protected SkinnedTransformer(SkinnedTransformer other)
+        protected SkinnedTransformer(SkinnedTransformer other, DeepCloneContext args)
             : base(other)
         {
             Guard.NotNull(other, nameof(other));
 
-            this._TargetBindMatrix = other._TargetBindMatrix;
-            this._Joints.AddRange(other._Joints);
+            this._NodeName = other._NodeName;
+            this._MeshPoseWorldMatrix = other._MeshPoseWorldMatrix;
+
+            foreach (var (joint, inverseBindMatrix) in other._Joints)
+            {
+                var jj = (args.GetNode(joint), inverseBindMatrix);
+
+                this._Joints.Add(jj);
+            }
         }
 
-        public override ContentTransformer DeepClone()
+        public override ContentTransformer DeepClone(DeepCloneContext args)
         {
-            return new SkinnedTransformer(this);
+            return new SkinnedTransformer(this, args);
         }
 
         #endregion
 
         #region data
 
-        private Matrix4x4? _TargetBindMatrix;
+        [System.Diagnostics.DebuggerBrowsable(System.Diagnostics.DebuggerBrowsableState.Never)]
+        private String _NodeName;
+
+        /// <summary>
+        /// Defines the world matrix of the mesh at the time of binding.
+        /// </summary>
+        [System.Diagnostics.DebuggerBrowsable(System.Diagnostics.DebuggerBrowsableState.Never)]
+        private Matrix4x4? _MeshPoseWorldMatrix;
 
         // condition: all NodeBuilder objects must have the same root.
-        private readonly List<(NodeBuilder Joints, Matrix4x4? InverseBindMatrix)> _Joints = new List<(NodeBuilder, Matrix4x4?)>();
+        [System.Diagnostics.DebuggerBrowsable(System.Diagnostics.DebuggerBrowsableState.Never)]
+        private readonly List<(NodeBuilder Joint, Matrix4x4? InverseBindMatrix)> _Joints = new List<(NodeBuilder, Matrix4x4?)>();
+
+        #endregion
+
+        #region properties
+
+        public override String Name => _NodeName;
 
         #endregion
 
@@ -237,7 +321,7 @@ namespace SharpGLTF.Scenes
             Guard.NotNull(joints, nameof(joints));
             Guard.IsTrue(NodeBuilder.IsValidArmature(joints), nameof(joints));
 
-            _TargetBindMatrix = meshWorldMatrix;
+            _MeshPoseWorldMatrix = meshWorldMatrix;
             _Joints.Clear();
             _Joints.AddRange(joints.Select(item => (item, (Matrix4x4?)null)));
         }
@@ -247,7 +331,7 @@ namespace SharpGLTF.Scenes
             Guard.NotNull(joints, nameof(joints));
             Guard.IsTrue(NodeBuilder.IsValidArmature(joints.Select(item => item.Joint)), nameof(joints));
 
-            _TargetBindMatrix = null;
+            _MeshPoseWorldMatrix = null;
             _Joints.Clear();
             _Joints.AddRange(joints.Select(item => (item.Joint, (Matrix4x4?)item.InverseBindMatrix)));
         }
@@ -258,8 +342,8 @@ namespace SharpGLTF.Scenes
 
             for (int i = 0; i < jb.Length; ++i)
             {
-                var j = _Joints[i].Joints;
-                var m = _Joints[i].InverseBindMatrix ?? Transforms.SkinnedTransform.CalculateInverseBinding(_TargetBindMatrix ?? Matrix4x4.Identity, j.WorldMatrix);
+                var j = _Joints[i].Joint;
+                var m = _Joints[i].InverseBindMatrix ?? Transforms.SkinnedTransform.CalculateInverseBinding(_MeshPoseWorldMatrix ?? Matrix4x4.Identity, j.WorldMatrix);
 
                 jb[i] = (j, m);
             }
@@ -270,7 +354,7 @@ namespace SharpGLTF.Scenes
         public override NodeBuilder GetArmatureRoot()
         {
             return _Joints
-                .Select(item => item.Joints.Root)
+                .Select(item => item.Joint.Root)
                 .Distinct()
                 .FirstOrDefault();
         }
@@ -287,6 +371,8 @@ namespace SharpGLTF.Scenes
                 default, false
                 );
         }
+
+        public override Matrix4x4 GetPoseWorldMatrix() => _MeshPoseWorldMatrix ?? Matrix4x4.Identity;
 
         #endregion
     }

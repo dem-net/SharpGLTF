@@ -6,43 +6,50 @@ using System.Text;
 namespace SharpGLTF.Transforms
 {
     /// <summary>
-    /// Represents an affine transform in 3D space,
-    /// defined by a <see cref="Quaternion"/> rotation,
-    /// a <see cref="Vector3"/> scale
-    /// and a <see cref="Vector3"/> translation.
+    /// Represents an affine transform in 3D space, defined by:
+    /// - A <see cref="Vector3"/> scale.
+    /// - A <see cref="Quaternion"/> rotation.
+    /// - A <see cref="Vector3"/> translation.
     /// </summary>
-    /// <see href="https://github.com/KhronosGroup/glTF-Validator/issues/33"/>
+    /// <remarks>
+    /// <see cref="AffineTransform"/> cannot represent skewed matrices. This means
+    /// that it can be used to represent <see cref="Schema2.Node"/> local transforms,
+    /// but since chained transforms can become skewed, a world transform cannot be
+    /// represented by a <see cref="AffineTransform"/>.
+    /// </remarks>
+    /// <see href="https://github.com/vpenades/SharpGLTF/issues/41"/>
+    [System.Diagnostics.DebuggerDisplay("AffineTransform 𝐒:{Scale} 𝐑:{Rotation} 𝚻:{Translation}")]
     public struct AffineTransform
     {
         #region lifecycle
 
-        public static AffineTransform Create(Matrix4x4 matrix)
+        public static implicit operator AffineTransform(Matrix4x4 matrix) { return new AffineTransform(matrix); }
+
+        public AffineTransform(Matrix4x4 matrix)
         {
-            return new AffineTransform(matrix, null, null, null);
+            if (!Matrix4x4.Decompose(matrix, out this.Scale, out this.Rotation, out this.Translation))
+            {
+                throw new ArgumentException("matrix is invalid or skewed.", nameof(matrix));
+            }
         }
 
-        public static AffineTransform Create(Vector3? scale, Quaternion? rotation, Vector3? translation)
+        public AffineTransform(Vector3? scale, Quaternion? rotation, Vector3? translation)
         {
-            return new AffineTransform(null, scale, rotation, translation);
+            this.Scale = scale ?? Vector3.One;
+            this.Rotation = rotation ?? Quaternion.Identity;
+            this.Translation = translation ?? Vector3.Zero;
         }
 
-        internal AffineTransform(Matrix4x4? matrix, Vector3? scale, Quaternion? rotation, Vector3? translation)
+        public static AffineTransform CreateFromAny(Matrix4x4? matrix, Vector3? scale, Quaternion? rotation, Vector3? translation)
         {
             if (matrix.HasValue)
             {
-                Matrix4x4.Decompose(matrix.Value, out this.Scale, out this.Rotation, out this.Translation);
+                return new AffineTransform(matrix.Value);
             }
             else
             {
-                this.Scale = scale ?? Vector3.One;
-                this.Rotation = rotation ?? Quaternion.Identity;
-                this.Translation = translation ?? Vector3.Zero;
+                return new AffineTransform(scale, rotation, translation);
             }
-        }
-
-        public static implicit operator AffineTransform(Matrix4x4 matrix)
-        {
-            return new AffineTransform(matrix, null, null, null);
         }
 
         #endregion
@@ -62,7 +69,7 @@ namespace SharpGLTF.Transforms
         /// <summary>
         /// Translation
         /// </summary>
-        public Vector3 Translation;
+        public  Vector3 Translation;
 
         #endregion
 
@@ -77,12 +84,9 @@ namespace SharpGLTF.Transforms
         {
             get
             {
-                return
-                    Matrix4x4.CreateScale(Scale)
-                    *
-                    Matrix4x4.CreateFromQuaternion(Rotation.Sanitized())
-                    *
-                    Matrix4x4.CreateTranslation(Translation);
+                var m = Matrix4x4.CreateScale(this.Scale) * Matrix4x4.CreateFromQuaternion(this.Rotation.Sanitized());
+                m.Translation = this.Translation;
+                return m;
             }
         }
 
@@ -113,31 +117,6 @@ namespace SharpGLTF.Transforms
 
         #region API
 
-        /// <summary>
-        /// Evaluates a <see cref="Matrix4x4"/> transform based on the available parameters.
-        /// </summary>
-        /// <param name="transform">A <see cref="Matrix4x4"/> instance, or null.</param>
-        /// <param name="scale">A <see cref="Vector3"/> instance, or null.</param>
-        /// <param name="rotation">A <see cref="Quaternion"/> instance, or null.</param>
-        /// <param name="translation">A <see cref="Vector3"/> instance, or null.</param>
-        /// <returns>A <see cref="Matrix4x4"/> transform.</returns>
-        public static Matrix4x4 Evaluate(Matrix4x4? transform, Vector3? scale, Quaternion? rotation, Vector3? translation)
-        {
-            if (transform.HasValue) return transform.Value;
-
-            return new AffineTransform(null, scale, rotation, translation).Matrix;
-        }
-
-        public static Matrix4x4 LocalToWorld(Matrix4x4 parentWorld, Matrix4x4 childLocal)
-        {
-            return childLocal * parentWorld;
-        }
-
-        public static Matrix4x4 WorldToLocal(Matrix4x4 parentWorld, Matrix4x4 childWorld)
-        {
-            return childWorld * parentWorld.Inverse();
-        }
-
         public static AffineTransform Blend(ReadOnlySpan<AffineTransform> transforms, ReadOnlySpan<float> weights)
         {
             var s = Vector3.Zero;
@@ -155,7 +134,47 @@ namespace SharpGLTF.Transforms
 
             r = Quaternion.Normalize(r);
 
-            return AffineTransform.Create(s, r, t);
+            return new  AffineTransform(s, r, t);
+        }
+
+        public static AffineTransform operator *(in AffineTransform a, in AffineTransform b)
+        {
+            return Multiply(a, b);
+        }
+
+        public static AffineTransform Multiply(in AffineTransform a, in AffineTransform b)
+        {
+            AffineTransform r;
+
+            r.Scale = Vector3Transform(b.Scale * Vector3Transform(a.Scale, a.Rotation), Quaternion.Inverse(a.Rotation));
+
+            r.Rotation = Quaternion.Multiply(b.Rotation, a.Rotation);
+
+            r.Translation
+                = b.Translation
+                + Vector3Transform(a.Translation * b.Scale, b.Rotation);
+
+            return r;
+        }
+
+        /// <summary>
+        /// This method is equivalent to System.Numerics.Vector3.Transform(Vector3 v, Quaternion q)
+        /// </summary>
+        /// <param name="v">The vector to transform</param>
+        /// <param name="q">The transform rotation</param>
+        /// <returns>The rotated vector</returns>
+        private static Vector3 Vector3Transform(Vector3 v, Quaternion q)
+        {
+            // Extract the vector part of the quaternion
+            var u = new Vector3(q.X, q.Y, q.Z);
+
+            // Extract the scalar part of the quaternion
+            var s = q.W;
+
+            // Do the math
+            return (2.0f * Vector3.Dot(u, v) * u)
+                + (((s * s) - Vector3.Dot(u, u)) * v)
+                + (2.0f * s * Vector3.Cross(u, v));
         }
 
         #endregion

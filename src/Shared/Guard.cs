@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace SharpGLTF
@@ -51,16 +52,34 @@ namespace SharpGLTF
             throw new ArgumentException(message, parameterName);
         }
 
+        public static void DirectoryPathMustExist(string dirPath, string parameterName, string message = "")
+        {
+            if (System.IO.Directory.Exists(dirPath)) return;
+
+            if (string.IsNullOrWhiteSpace(message)) message = $"{dirPath} is invalid or does not exist.";
+            throw new ArgumentException(message, parameterName);
+        }
+
         #endregion
 
         #region null / empty
 
-        public static void NotNull(object target, string parameterName, string message = "")
+        // Preventing CA1062...
+        // https://github.com/dotnet/roslyn-analyzers/issues/2691
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void NotNull(object target, string parameterName)
         {
-            if (target != null) return;
-            throw new ArgumentNullException(parameterName, message);
+            if (target == null) throw new ArgumentNullException(parameterName);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void NotNull(object target, string parameterName, string message)
+        {
+            if (target == null) throw new ArgumentNullException(parameterName, message);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void MustBeNull(object target, string parameterName, string message = "")
         {
             if (target == null) return;
@@ -90,7 +109,7 @@ namespace SharpGLTF
         {
             if (value.CompareTo(expected) == 0) return;
 
-            throw new ArgumentOutOfRangeException(parameterName, $"{parameterName} {value} must be equal to {expected}.");
+            throw new ArgumentException(parameterName, $"{parameterName} {value} must be equal to {expected}.");
         }
 
         public static void MustBePositiveAndMultipleOf(int value, int padding, string parameterName, string message = "")
@@ -170,6 +189,36 @@ namespace SharpGLTF
         #endregion
 
         #region specialised
+
+        private static readonly IReadOnlyList<Char> _InvalidRelativePathChars =
+            System.IO.Path.GetInvalidFileNameChars()
+            .Where(c => c != '/' && c != '\\')
+            .ToArray();
+
+        public static void IsValidURI(string parameterName, string gltfURI, params string[] validHeaders)
+        {
+            if (string.IsNullOrEmpty(gltfURI)) return;
+
+            foreach (var hdr in validHeaders)
+            {
+                if (gltfURI.StartsWith(hdr, StringComparison.OrdinalIgnoreCase))
+                {
+                    string value = hdr + ",";
+                    if (gltfURI.StartsWith(value, StringComparison.OrdinalIgnoreCase)) return;
+                    if (gltfURI.StartsWith(hdr + ";base64,", StringComparison.OrdinalIgnoreCase)) return;
+
+                    throw new ArgumentException($"{parameterName} has invalid URI '{gltfURI}'.");
+                }
+            }
+
+            if (gltfURI.Any(c => _InvalidRelativePathChars.Contains(c))) throw new ArgumentException($"Invalid URI '{gltfURI}'.");
+
+            if (gltfURI.Any(chr => char.IsWhiteSpace(chr))) gltfURI = Uri.EscapeUriString(gltfURI);
+
+            if (!Uri.TryCreate(gltfURI, UriKind.Relative, out Uri xuri)) throw new ArgumentException($"Invalid URI '{gltfURI}'.");
+
+            return;
+        }
 
         public static void MustShareLogicalParent(Schema2.LogicalChildOfRoot a, Schema2.LogicalChildOfRoot b, string parameterName)
         {

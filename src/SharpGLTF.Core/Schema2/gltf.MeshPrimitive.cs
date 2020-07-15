@@ -151,7 +151,7 @@ namespace SharpGLTF.Schema2
 
         public Memory.MemoryAccessor GetVertices(string attributeKey)
         {
-            return GetVertexAccessor(attributeKey)._GetMemoryAccessor();
+            return GetVertexAccessor(attributeKey)._GetMemoryAccessor(attributeKey);
         }
 
         #endregion
@@ -252,50 +252,46 @@ namespace SharpGLTF.Schema2
 
         #region validation
 
-        protected override void OnValidateReferences(Validation.ValidationContext result)
+        protected override void OnValidateReferences(Validation.ValidationContext validate)
         {
-            base.OnValidateReferences(result);
+            base.OnValidateReferences(validate);
 
             var root = this.LogicalParent.LogicalParent;
 
-            result.CheckArrayIndexAccess("Material", _material, root.LogicalMaterials);
-            result.CheckArrayIndexAccess("Indices", _indices, root.LogicalAccessors);
+            validate
+                .IsNullOrIndex("Material", _material, root.LogicalMaterials)
+                .IsNullOrIndex("Indices", _indices, root.LogicalAccessors);
 
             foreach (var idx in _attributes.Values)
             {
-                result.CheckArrayIndexAccess("Attributes", idx, root.LogicalAccessors);
+                validate.IsNullOrIndex("Attributes", idx, root.LogicalAccessors);
             }
 
             foreach (var idx in _targets.SelectMany(item => item.Values))
             {
-                result.CheckArrayIndexAccess("Targets", idx, root.LogicalAccessors);
+                validate.IsNullOrIndex("Targets", idx, root.LogicalAccessors);
             }
         }
 
-        protected override void OnValidate(Validation.ValidationContext result)
+        protected override void OnValidateContent(Validation.ValidationContext validate)
         {
-            base.OnValidate(result);
+            base.OnValidateContent(validate);
 
             // all vertices must have the same vertex count
 
-            var vertexCounts = VertexAccessors
-                .Select(item => item.Value.Count)
-                .Distinct();
+            int vertexCount = -1;
 
-            if (vertexCounts.Skip(1).Any())
+            foreach (var va in VertexAccessors)
             {
-                result.AddLinkError("Attributes", "All accessors of the same primitive must have the same count.");
-                return;
+                if (vertexCount < 0) { vertexCount = va.Value.Count; continue; }
+                validate.AreEqual(va.Key, va.Value.Count, vertexCount);
             }
-
-            var vertexCount = vertexCounts.First();
 
             // check indices
 
             if (IndexAccessor != null)
             {
-                if (IndexAccessor.SourceBufferView.ByteStride != 0) result.AddLinkError("bufferView.byteStride must not be defined for indices accessor.");
-                IndexAccessor.ValidateIndices(result, (uint)vertexCount, DrawPrimitiveType);
+                IndexAccessor.ValidateIndices(validate, (uint)vertexCount, DrawPrimitiveType);
 
                 var incompatibleMode = false;
 
@@ -319,49 +315,53 @@ namespace SharpGLTF.Schema2
                         if (!IndexAccessor.Count.IsMultipleOf(3)) incompatibleMode = true;
                         break;
                 }
-
-                if (incompatibleMode) result.AddLinkWarning("Indices", $"Number of vertices or indices({IndexAccessor.Count}) is not compatible with used drawing mode('{this.DrawPrimitiveType}').");
             }
 
-            // check attributes accessors
+            // check vertex attributes accessors ByteStride
 
             foreach (var group in this.VertexAccessors.Values.GroupBy(item => item.SourceBufferView))
             {
-                if (group.Skip(1).Any())
+                if (!group.Skip(1).Any()) continue;
+
+                // if more than one accessor shares a BufferView, it must define a ByteStride
+
+                validate.IsGreater("ByteStride", group.Key.ByteStride, 0); // " must be defined when two or more accessors use the same BufferView."
+
+                // determine if we're sequential or strided by checking if the memory buffers overlap
+                var memories = group.Select(item => item._GetMemoryAccessor());
+                var overlap = Memory.MemoryAccessor.HaveOverlappingBuffers(memories);
+
+                bool ok = false;
+
+                // strided buffer detected
+                if (overlap)
                 {
-                    // if more than one accessor shares a BufferView, it must define a ByteStride
+                    ok = group.Sum(item => item.Format.ByteSizePadded) == group.Key.ByteStride;
+                }
 
-                    if (group.Key.ByteStride == 0)
-                    {
-                        result.GetContext(group.Key).AddLinkError("ByteStride", " must be defined when two or more accessors use the same BufferView.");
-                        return;
-                    }
+                // sequential buffer detected
+                else
+                {
+                    ok = group.All(item => item.Format.ByteSizePadded <= group.Key.ByteStride);
+                }
 
-                    // now, there's two possible outcomes:
-                    // - sequential accessors: all accessors's ElementByteStride should be EQUAL to BufferView's ByteStride
-                    // - strided accessors: all accessors's ElementByteStride should SUM to BufferView's ByteStride
-
-                    if (group.All(item => item.ElementByteSize.WordPadded() == group.Key.ByteStride))
-                    {
-                        // sequential format.
-                    }
-                    else if (group.Sum(item => item.ElementByteSize.WordPadded()) == group.Key.ByteStride)
-                    {
-                        // strided format.
-                    }
-                    else
-                    {
-                        var accessors = string.Join(" ", group.Select(item => item.LogicalIndex));
-                        result.AddLinkError("Attributes", $"Inconsistent accessors configuration: {accessors}");
-                    }
+                if (!ok)
+                {
+                    var accessors = string.Join(" ", group.Select(item => item.LogicalIndex));
+                    validate._LinkThrow("Attributes", $"Inconsistent accessors configuration: {accessors}");
                 }
             }
 
             // check vertex attributes
 
-            _ValidatePositions(result);
-            _ValidateNormals(result);
-            _ValidateTangents(result);
+            if (validate.TryFix)
+            {
+                var vattributes = this.VertexAccessors
+                    .Select(item => item.Value._GetMemoryAccessor(item.Key))
+                    .ToArray();
+
+                Memory.MemoryAccessor.SanitizeVertexAttributes(vattributes);
+            }
 
             // find skins using this mesh primitive:
 
@@ -370,65 +370,12 @@ namespace SharpGLTF.Schema2
                 .LogicalNodes
                 .Where(item => item.Mesh == this.LogicalParent)
                 .Select(item => item.Skin)
-                .ToList();
+                .Where(item => item != null)
+                .Select(item => item.JointsCount);
 
-            _ValidateJoints(result, skins, "JOINTS_0");
-            _ValidateJoints(result, skins, "JOINTS_1");
-        }
+            var maxJoints = skins.Any() ? skins.Max() : 0;
 
-        private void _ValidatePositions(Validation.ValidationContext result)
-        {
-            var positions = GetVertexAccessor("POSITION");
-            if (positions == null)
-            {
-                result.AddSemanticWarning("No POSITION attribute found.");
-                return;
-            }
-
-            positions.ValidatePositions(result);
-        }
-
-        private void _ValidateNormals(Validation.ValidationContext result)
-        {
-            var normals = GetVertexAccessor("NORMAL");
-            if (normals == null) return;
-
-            normals.ValidateNormals(result);
-        }
-
-        private void _ValidateTangents(Validation.ValidationContext result)
-        {
-            var tangents = GetVertexAccessor("TANGENT");
-            if (tangents == null) return;
-
-            if (GetVertexAccessor("NORMAL") == null) result.AddSemanticWarning("TANGENT", "attribute without NORMAL found.");
-            if (DrawPrimitiveType == PrimitiveType.POINTS) result.AddSemanticWarning("TANGENT", "attribute defined for POINTS rendering mode.");
-
-            tangents.ValidateTangents(result);
-        }
-
-        private void _ValidateJoints(Validation.ValidationContext result, IEnumerable<Skin> skins, string attributeName)
-        {
-            var joints = GetVertexAccessor(attributeName);
-
-            if (joints == null) return;
-
-            joints.ValidateJoints(result, attributeName);
-
-            int max = 0;
-            foreach (var jjjj in joints.AsVector4Array())
-            {
-                max = Math.Max(max, (int)jjjj.X);
-                max = Math.Max(max, (int)jjjj.Y);
-                max = Math.Max(max, (int)jjjj.Z);
-                max = Math.Max(max, (int)jjjj.W);
-            }
-
-            foreach (var skin in skins.Where(item => item != null))
-            {
-                var skinJoints = new int[skin.JointsCount];
-                result.CheckArrayIndexAccess(attributeName, max, skinJoints);
-            }
+            Accessor.ValidateVertexAttributes(validate, this.VertexAccessors, maxJoints);
         }
 
         #endregion

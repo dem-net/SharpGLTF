@@ -31,7 +31,7 @@ namespace SharpGLTF.Scenes
 
         public Node GetNode(NodeBuilder key) { return key == null ? null : _Nodes.TryGetValue(key, out Node val) ? val : null; }
 
-        public void AddGeometryResources(ModelRoot root, IEnumerable<SceneBuilder> srcScenes, bool useStridedBuffers)
+        public void AddGeometryResources(ModelRoot root, IEnumerable<SceneBuilder> srcScenes, SceneBuilderSchema2Settings settings)
         {
             // gather all unique MeshBuilders
 
@@ -63,7 +63,7 @@ namespace SharpGLTF.Scenes
 
             // create a Schema2.Mesh for every MeshBuilder.
 
-            var dstMeshes = root.CreateMeshes(mat => _Materials[mat], useStridedBuffers, srcMeshes);
+            var dstMeshes = root.CreateMeshes(mat => _Materials[mat], settings, srcMeshes);
 
             for (int i = 0; i < srcMeshes.Length; ++i)
             {
@@ -119,7 +119,7 @@ namespace SharpGLTF.Scenes
             foreach (var c in srcNode.VisualChildren) CreateArmature(dstNode.CreateNode, c);
         }
 
-        public void SetMorphAnimation(Node dstNode, Animations.AnimatableProperty<Transforms.SparseWeight8> animation)
+        public static void SetMorphAnimation(Node dstNode, Animations.AnimatableProperty<Transforms.SparseWeight8> animation)
         {
             if (animation == null) return;
 
@@ -157,18 +157,37 @@ namespace SharpGLTF.Scenes
         #endregion
     }
 
-    public partial class SceneBuilder
+    public struct SceneBuilderSchema2Settings
+    {
+        public static SceneBuilderSchema2Settings Default => new SceneBuilderSchema2Settings
+        {
+            UseStridedBuffers = true,
+            CompactVertexWeights = false
+        };
+
+        public bool UseStridedBuffers;
+
+        public bool CompactVertexWeights;
+    }
+
+    public partial class SceneBuilder : IConvertibleToGltf2
     {
         #region from SceneBuilder to Schema2
 
-        public static ModelRoot ToSchema2(IEnumerable<SceneBuilder> srcScenes, bool useStridedBuffers = true)
+        /// <summary>
+        /// Convertes a collection of <see cref="SceneBuilder"/> instances to a single <see cref="ModelRoot"/> instance.
+        /// </summary>
+        /// <param name="srcScenes">A collection of scenes</param>
+        /// <param name="settings">Conversion settings.</param>
+        /// <returns>A new <see cref="ModelRoot"/> instance.</returns>
+        public static ModelRoot ToSchema2(IEnumerable<SceneBuilder> srcScenes, SceneBuilderSchema2Settings settings)
         {
             Guard.NotNull(srcScenes, nameof(srcScenes));
 
             var context = new Schema2SceneBuilder();
 
             var dstModel = ModelRoot.CreateModel();
-            context.AddGeometryResources(dstModel, srcScenes, useStridedBuffers);
+            context.AddGeometryResources(dstModel, srcScenes, settings);
 
             foreach (var srcScene in srcScenes)
             {
@@ -185,14 +204,14 @@ namespace SharpGLTF.Scenes
         /// <summary>
         /// Converts this <see cref="SceneBuilder"/> instance into a <see cref="ModelRoot"/> instance.
         /// </summary>
-        /// <param name="useStridedBuffers">True to generate strided vertex buffers whenever possible.</param>
+        /// <param name="settings">Conversion settings.</param>
         /// <returns>A new <see cref="ModelRoot"/> instance.</returns>
-        public ModelRoot ToSchema2(bool useStridedBuffers = true)
+        public ModelRoot ToGltf2(SceneBuilderSchema2Settings settings)
         {
             var context = new Schema2SceneBuilder();
 
             var dstModel = ModelRoot.CreateModel();
-            context.AddGeometryResources(dstModel, new[] { this }, useStridedBuffers);
+            context.AddGeometryResources(dstModel, new[] { this }, settings);
 
             var dstScene = dstModel.UseScene(0);
 
@@ -200,7 +219,14 @@ namespace SharpGLTF.Scenes
 
             context.AddScene(dstScene, this);
 
+            dstModel.DefaultScene = dstScene;
+
             return dstModel;
+        }
+
+        public ModelRoot ToGltf2()
+        {
+            return ToGltf2(SceneBuilderSchema2Settings.Default);
         }
 
         #endregion

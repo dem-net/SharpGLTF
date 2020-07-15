@@ -13,18 +13,28 @@ namespace SharpGLTF
     /// </summary>
     static class _Extensions
     {
+        #region constants
+
+        // constants from: https://github.com/KhronosGroup/glTF-Validator/blob/master/lib/src/errors.dart
+
+        private const float _UnitLengthThresholdVec3 = 0.00674f;
+        private const float _UnitLengthThresholdVec4 = 0.00769f;
+
+        // This value is slightly greater
+        // than the maximum error from unsigned 8-bit quantization
+        // 1..2 elements - 0 * step
+        // 3..4 elements - 1 * step
+        // 5..6 elements - 2 * step
+        // ...
+        private const float _UnitSumThresholdStep = 0.0039216f;
+
+        #endregion
+
         #region private numerics extensions
 
         internal static bool IsMultipleOf(this int value, int mult)
         {
             return (value % mult) == 0;
-        }
-
-        internal static int PaddingSize(this int size, int mult)
-        {
-            var rest = size % mult;
-
-            return rest == 0 ? 0 : mult - rest;
         }
 
         internal static int WordPadded(this int length)
@@ -36,36 +46,36 @@ namespace SharpGLTF
 
         internal static bool _IsFinite(this float value)
         {
-            return !(float.IsNaN(value) | float.IsInfinity(value));
+            return !(float.IsNaN(value) || float.IsInfinity(value));
         }
 
         internal static bool _IsFinite(this Vector2 v)
         {
-            return v.X._IsFinite() & v.Y._IsFinite();
+            return v.X._IsFinite() && v.Y._IsFinite();
         }
 
         internal static bool _IsFinite(this Vector3 v)
         {
-            return v.X._IsFinite() & v.Y._IsFinite() & v.Z._IsFinite();
+            return v.X._IsFinite() && v.Y._IsFinite() && v.Z._IsFinite();
         }
 
         internal static bool _IsFinite(this Vector4 v)
         {
-            return v.X._IsFinite() & v.Y._IsFinite() & v.Z._IsFinite() & v.W._IsFinite();
+            return v.X._IsFinite() && v.Y._IsFinite() && v.Z._IsFinite() && v.W._IsFinite();
         }
 
         internal static bool _IsFinite(this Matrix4x4 v)
         {
-            if (!(v.M11._IsFinite() & v.M12._IsFinite() & v.M13._IsFinite() & v.M14._IsFinite())) return false;
-            if (!(v.M21._IsFinite() & v.M22._IsFinite() & v.M23._IsFinite() & v.M24._IsFinite())) return false;
-            if (!(v.M31._IsFinite() & v.M32._IsFinite() & v.M33._IsFinite() & v.M34._IsFinite())) return false;
-            if (!(v.M41._IsFinite() & v.M42._IsFinite() & v.M43._IsFinite() & v.M44._IsFinite())) return false;
+            if (!(v.M11._IsFinite() && v.M12._IsFinite() && v.M13._IsFinite() && v.M14._IsFinite())) return false;
+            if (!(v.M21._IsFinite() && v.M22._IsFinite() && v.M23._IsFinite() && v.M24._IsFinite())) return false;
+            if (!(v.M31._IsFinite() && v.M32._IsFinite() && v.M33._IsFinite() && v.M34._IsFinite())) return false;
+            if (!(v.M41._IsFinite() && v.M42._IsFinite() && v.M43._IsFinite() && v.M44._IsFinite())) return false;
             return true;
         }
 
         internal static bool _IsFinite(this Quaternion v)
         {
-            return v.X._IsFinite() & v.Y._IsFinite() & v.Z._IsFinite() & v.W._IsFinite();
+            return v.X._IsFinite() && v.Y._IsFinite() && v.Z._IsFinite() && v.W._IsFinite();
         }
 
         internal static Vector3 WithLength(this Vector3 v, float len)
@@ -73,16 +83,23 @@ namespace SharpGLTF
             return Vector3.Normalize(v) * len;
         }
 
+        internal static Boolean IsNormalized(this Vector3 normal)
+        {
+            if (!normal._IsFinite()) return false;
+
+            return Math.Abs(normal.Length() - 1) <= _UnitLengthThresholdVec3;
+        }
+
+        internal static Boolean IsNormalized(this Quaternion rotation)
+        {
+            if (!rotation._IsFinite()) return false;
+
+            return Math.Abs(rotation.Length() - 1) <= _UnitLengthThresholdVec4;
+        }
+
         internal static Quaternion AsQuaternion(this Vector4 v)
         {
             return new Quaternion(v.X, v.Y, v.Z, v.W);
-        }
-
-        internal static Boolean IsNormalized(this Quaternion q)
-        {
-            // As per: https://github.com/KhronosGroup/glTF-Validator/issues/33 , quaternions need to be normalized.
-
-            return Math.Abs(1.0 - q.Length()) > 0.000005;
         }
 
         internal static Quaternion Sanitized(this Quaternion q)
@@ -114,18 +131,17 @@ namespace SharpGLTF
             return (value - r) == Vector4.Zero;
         }
 
+        /*
         internal static void Validate(this Vector3 vector, string msg)
         {
             if (!vector._IsFinite()) throw new NotFiniteNumberException($"{msg} is invalid.");
-        }
+        }*/
 
         internal static void ValidateNormal(this Vector3 normal, string msg)
         {
             if (!normal._IsFinite()) throw new NotFiniteNumberException($"{msg} is invalid.");
 
-            var len = normal.Length();
-
-            if (len < 0.99f || len > 1.01f) throw new ArithmeticException($"{msg} is not unit length.");
+            if (!normal.IsNormalized()) throw new ArithmeticException($"{msg} is not unit length.");
         }
 
         internal static void ValidateTangent(this Vector4 tangent, string msg)
@@ -135,44 +151,40 @@ namespace SharpGLTF
             new Vector3(tangent.X, tangent.Y, tangent.Z).ValidateNormal(msg);
         }
 
-        internal static bool IsValidNormal(this Vector3 normal)
-        {
-            if (!normal._IsFinite()) return false;
-
-            var len = normal.Length();
-
-            if (len < 0.99f || len > 1.01f) return false;
-
-            return true;
-        }
-
         internal static Vector3 SanitizeNormal(this Vector3 normal)
         {
-            var isn = normal._IsFinite() && normal.LengthSquared() > 0;
-            return isn ? Vector3.Normalize(normal) : Vector3.UnitZ;
+            return normal.IsNormalized() ? normal : Vector3.Normalize(normal);
         }
 
         internal static bool IsValidTangent(this Vector4 tangent)
         {
             if (tangent.W != 1 && tangent.W != -1) return false;
 
-            return new Vector3(tangent.X, tangent.Y, tangent.Z).IsValidNormal();
+            return new Vector3(tangent.X, tangent.Y, tangent.Z).IsNormalized();
         }
 
         internal static Vector4 SanitizeTangent(this Vector4 tangent)
         {
-            var n = new Vector3(tangent.X, tangent.Y, tangent.Z);
+            var n = new Vector3(tangent.X, tangent.Y, tangent.Z).SanitizeNormal();
             var s = float.IsNaN(tangent.W) ? 1 : tangent.W;
-            var isn = n._IsFinite() && n.LengthSquared() > 0;
-            n = isn ? Vector3.Normalize(n) : Vector3.UnitX;
             return new Vector4(n, s > 0 ? 1 : -1);
         }
 
-        internal static Matrix4x4 Inverse(this Matrix4x4 src)
+        internal static Matrix4x4 Inverse(this in Matrix4x4 src)
         {
             if (!Matrix4x4.Invert(src, out Matrix4x4 dst)) Guard.IsTrue(false, nameof(src), "Matrix cannot be inverted.");
 
             return dst;
+        }
+
+        internal static bool IsValid(this in Matrix4x4 matrix, bool mustDecompose = true, bool mustInvert = true, bool mustPositiveDeterminant = false)
+        {
+            if (!matrix._IsFinite()) return false;
+            if (mustDecompose && !Matrix4x4.Decompose(matrix, out _, out _, out _)) return false;
+            if (mustInvert && !Matrix4x4.Invert(matrix, out _)) return false;
+            if (mustPositiveDeterminant && matrix.GetDeterminant() < 0) return false;
+
+            return true;
         }
 
         #endregion
@@ -330,7 +342,7 @@ namespace SharpGLTF
             }
         }
 
-        internal static void AddRange<Tin, Tout>(this IList<Tout> dst, IEnumerable<Tin> src, Func<Tin, Tout> cvt)
+        internal static void AddRange<Tin, Tout>(this IList<Tout> dst, IEnumerable<Tin> src, Converter<Tin, Tout> cvt)
         {
             foreach (var item in src)
             {
@@ -343,78 +355,20 @@ namespace SharpGLTF
             return collection.Concat(instances.Where(item => item != null));
         }
 
-        #endregion
-
-        #region images
-
-        internal static bool _IsPngImage(this IReadOnlyList<Byte> data)
+        public static void SanitizeNormals(this IList<Vector3> normals)
         {
-            if (data[0] != 0x89) return false;
-            if (data[1] != 0x50) return false;
-            if (data[2] != 0x4e) return false;
-            if (data[3] != 0x47) return false;
-
-            return true;
+            for (int i = 0; i < normals.Count; ++i)
+            {
+                if (!normals[i].IsNormalized()) normals[i] = normals[i].SanitizeNormal();
+            }
         }
 
-        internal static bool _IsJpgImage(this IReadOnlyList<Byte> data)
+        public static void SanitizeTangents(this IList<Vector4> tangents)
         {
-            if (data[0] != 0xff) return false;
-            if (data[1] != 0xd8) return false;
-
-            return true;
-        }
-
-        internal static bool _IsDdsImage(this IReadOnlyList<Byte> data)
-        {
-            if (data[0] != 0x44) return false;
-            if (data[1] != 0x44) return false;
-            if (data[2] != 0x53) return false;
-            if (data[3] != 0x20) return false;
-            return true;
-        }
-
-        internal static bool _IsWebpImage(this IReadOnlyList<Byte> data)
-        {
-            // RIFF
-            if (data[0] != 0x52) return false;
-            if (data[1] != 0x49) return false;
-            if (data[2] != 0x46) return false;
-            if (data[3] != 0x46) return false;
-
-            // WEBP
-            if (data[8] != 0x57) return false;
-            if (data[9] != 0x45) return false;
-            if (data[10] != 0x42) return false;
-            if (data[11] != 0x50) return false;
-
-            return true;
-        }
-
-        internal static bool _IsImage(this IReadOnlyList<Byte> data)
-        {
-            if (data == null) return false;
-            if (data.Count < 12) return false;
-
-            if (data._IsDdsImage()) return true;
-            if (data._IsJpgImage()) return true;
-            if (data._IsPngImage()) return true;
-            if (data._IsWebpImage()) return true;
-
-            return false;
-        }
-
-        internal static bool _IsImage(this IReadOnlyList<Byte> image, string format)
-        {
-            if (string.IsNullOrWhiteSpace(format)) return image._IsImage();
-
-            if (format.EndsWith("png", StringComparison.OrdinalIgnoreCase)) return image._IsPngImage();
-            if (format.EndsWith("jpg", StringComparison.OrdinalIgnoreCase)) return image._IsJpgImage();
-            if (format.EndsWith("jpeg", StringComparison.OrdinalIgnoreCase)) return image._IsJpgImage();
-            if (format.EndsWith("dds", StringComparison.OrdinalIgnoreCase)) return image._IsDdsImage();
-            if (format.EndsWith("webp", StringComparison.OrdinalIgnoreCase)) return image._IsWebpImage();
-
-            return false;
+            for (int i = 0; i < tangents.Count; ++i)
+            {
+                if (!tangents[i].IsValidTangent()) tangents[i] = tangents[i].SanitizeTangent();
+            }
         }
 
         #endregion
@@ -548,17 +502,17 @@ namespace SharpGLTF
             }
         }
 
-        public static IEnumerable<(int, int)> GetLinesIndices(this PrimitiveType ptype, int vertexCount)
+        public static IEnumerable<(int A, int B)> GetLinesIndices(this PrimitiveType ptype, int vertexCount)
         {
             return ptype.GetLinesIndices(Enumerable.Range(0, vertexCount).Select(item => (UInt32)item));
         }
 
-        public static IEnumerable<(int, int, int)> GetTrianglesIndices(this PrimitiveType ptype, int vertexCount)
+        public static IEnumerable<(int A, int B, int C)> GetTrianglesIndices(this PrimitiveType ptype, int vertexCount)
         {
             return ptype.GetTrianglesIndices(Enumerable.Range(0, vertexCount).Select(item => (UInt32)item));
         }
 
-        public static IEnumerable<(int, int)> GetLinesIndices(this PrimitiveType ptype, IEnumerable<UInt32> sourceIndices)
+        public static IEnumerable<(int A, int B)> GetLinesIndices(this PrimitiveType ptype, IEnumerable<UInt32> sourceIndices)
         {
             switch (ptype)
             {
@@ -584,7 +538,7 @@ namespace SharpGLTF
             }
         }
 
-        public static IEnumerable<(int, int, int)> GetTrianglesIndices(this PrimitiveType ptype, IEnumerable<UInt32> sourceIndices)
+        public static IEnumerable<(int A, int B, int C)> GetTrianglesIndices(this PrimitiveType ptype, IEnumerable<UInt32> sourceIndices)
         {
             switch (ptype)
             {
@@ -683,6 +637,13 @@ namespace SharpGLTF
 
         #region serialization
 
+        public static Byte[] ToUnderlayingArray(this ArraySegment<Byte> segment)
+        {
+            if (segment.Offset == 0 && segment.Count == segment.Array.Length) return segment.Array;
+
+            return segment.ToArray();
+        }
+
         public static ArraySegment<Byte> ToArraySegment(this System.IO.MemoryStream m)
         {
             if (m.TryGetBuffer(out ArraySegment<Byte> data)) return data;
@@ -695,9 +656,51 @@ namespace SharpGLTF
 
             if (content.Length.IsMultipleOf(4)) return content;
 
-            var paddedContent = new Byte[content.Length + content.Length.PaddingSize(4)];
+            var rest = content.Length % 4;
+            rest = rest == 0 ? 0 : 4 - rest;
+
+            var paddedContent = new Byte[content.Length + rest];
             content.CopyTo(paddedContent, 0);
             return paddedContent;
+        }
+
+        public static Byte[] TryParseBase64Unchecked(this string uri, params string[] prefixes)
+        {
+            if (uri == null) return null;
+
+            if (!uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) return null;
+
+            foreach (var prefix in prefixes)
+            {
+                var data = _TryParseBase64Unchecked(uri, prefix);
+                if (data != null) return data;
+            }
+
+            return null;
+        }
+
+        private static Byte[] _TryParseBase64Unchecked(string uri, string prefix)
+        {
+            if (!uri.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return null;
+
+            var content = uri.Substring(prefix.Length);
+
+            if (content.StartsWith(";base64,", StringComparison.OrdinalIgnoreCase))
+            {
+                content = content.Substring(";base64,".Length);
+                return Convert.FromBase64String(content);
+            }
+
+            if (content.StartsWith(",", StringComparison.OrdinalIgnoreCase))
+            {
+                content = content.Substring(",".Length);
+
+                if (content.Length == 1) return new Byte[] { Byte.Parse(content, System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture) };
+
+                throw new NotImplementedException();
+            }
+
+            throw new NotImplementedException();
         }
 
         #endregion

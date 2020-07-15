@@ -16,9 +16,7 @@ namespace SharpGLTF.Collections
 
         private readonly List<T> _Vertices = new List<T>();
 
-        private readonly T[] _VertexProbe = new T[1];
-
-        private readonly Dictionary<VertexKey, int> _VertexCache = new Dictionary<VertexKey, int>();
+        private readonly Dictionary<IVertexKey, int> _VertexCache = new Dictionary<IVertexKey, int>(_KeyComparer.Instance);
 
         #endregion
 
@@ -34,9 +32,7 @@ namespace SharpGLTF.Collections
 
         public int Use(T v)
         {
-            _VertexProbe[0] = v;
-
-            if (_VertexCache.TryGetValue(new VertexKey(_VertexProbe, 0), out int index))
+            if (_VertexCache.TryGetValue(new QueryKey(v), out int index))
             {
                 System.Diagnostics.Debug.Assert(Object.Equals(v, _Vertices[index]), "Vertex equality failed");
                 return index;
@@ -46,7 +42,7 @@ namespace SharpGLTF.Collections
 
             _Vertices.Add(v);
 
-            var key = new VertexKey(_Vertices, index);
+            var key = new StoredKey(_Vertices, index);
 
             _VertexCache[key] = index;
 
@@ -61,9 +57,21 @@ namespace SharpGLTF.Collections
             {
                 _Vertices[i] = transformFunc(_Vertices[i]);
 
-                var key = new VertexKey(_Vertices, i);
+                var key = new StoredKey(_Vertices, i);
 
                 _VertexCache[key] = i;
+            }
+        }
+
+        public void CopyTo(VertexList<T> dst)
+        {
+            for (int i = 0; i < this._Vertices.Count; ++i)
+            {
+                var v = this._Vertices[i];
+
+                var idx = dst._Vertices.Count;
+                dst._Vertices.Add(v);
+                dst._VertexCache[new StoredKey(dst._Vertices, idx)] = idx;
             }
         }
 
@@ -71,10 +79,49 @@ namespace SharpGLTF.Collections
 
         #region types
 
-        [System.Diagnostics.DebuggerDisplay("{_Index} {GetHashCode()}")]
-        private struct VertexKey : IEquatable<VertexKey>
+        interface IVertexKey
         {
-            public VertexKey(IReadOnlyList<T> src, int idx)
+            T GetValue();
+        }
+
+        sealed class _KeyComparer : IEqualityComparer<IVertexKey>
+        {
+            static _KeyComparer() { }
+            private _KeyComparer() { }
+
+            private static readonly _KeyComparer _Instance = new _KeyComparer();
+            public static _KeyComparer Instance => _Instance;
+
+            public bool Equals(IVertexKey x, IVertexKey y)
+            {
+                var xx = x.GetValue();
+                var yy = y.GetValue();
+
+                return object.Equals(xx, yy);
+            }
+
+            public int GetHashCode(IVertexKey obj)
+            {
+                return obj
+                    .GetValue()
+                    .GetHashCode();
+            }
+        }
+
+        [System.Diagnostics.DebuggerDisplay("{GetValue()} {GetHashCode()}")]
+        private readonly struct QueryKey : IVertexKey
+        {
+            public QueryKey(T value) { _Value = value; }
+
+            private readonly T _Value;
+
+            public T GetValue() { return _Value; }
+        }
+
+        [System.Diagnostics.DebuggerDisplay("{GetValue()} {GetHashCode()}")]
+        private readonly struct StoredKey : IVertexKey
+        {
+            public StoredKey(IReadOnlyList<T> src, int idx)
             {
                 _Source = src;
                 _Index = idx;
@@ -84,29 +131,6 @@ namespace SharpGLTF.Collections
             private readonly int _Index;
 
             public T GetValue() { return _Source[_Index]; }
-
-            public override int GetHashCode()
-            {
-                return GetValue().GetHashCode();
-            }
-
-            public static bool AreEqual(VertexKey x, VertexKey y)
-            {
-                var xx = x.GetValue();
-                var yy = y.GetValue();
-
-                return object.Equals(xx, yy);
-            }
-
-            public override bool Equals(object obj)
-            {
-                return AreEqual(this, (VertexKey)obj);
-            }
-
-            public bool Equals(VertexKey other)
-            {
-                return AreEqual(this, other);
-            }
         }
 
         #endregion

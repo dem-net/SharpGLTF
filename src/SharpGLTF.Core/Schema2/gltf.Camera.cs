@@ -63,7 +63,7 @@ namespace SharpGLTF.Schema2
         /// <param name="zfar">Distance to the far plane in the Z axis.</param>
         public void SetOrthographicMode(float xmag, float ymag, float znear, float zfar)
         {
-            CameraOrthographic.CheckParameters(xmag, ymag, znear, zfar);
+            CameraOrthographic.VerifyParameters(xmag, ymag, znear, zfar);
 
             this._perspective = null;
             this._orthographic = new CameraOrthographic(xmag, ymag, znear, zfar);
@@ -80,12 +80,33 @@ namespace SharpGLTF.Schema2
         /// <param name="zfar">Distance to the far plane in the Z axis.</param>
         public void SetPerspectiveMode(float? aspectRatio, float yfov, float znear, float zfar)
         {
-            CameraPerspective.CheckParameters(aspectRatio, yfov, znear, zfar);
+            CameraPerspective.VerifyParameters(aspectRatio, yfov, znear, zfar);
 
             this._orthographic = null;
             this._perspective = new CameraPerspective(aspectRatio, yfov, znear, zfar);
 
             this._type = CameraType.perspective;
+        }
+
+        #endregion
+
+        #region validation
+
+        protected override void OnValidateReferences(Validation.ValidationContext validate)
+        {
+            if (_type == CameraType.perspective)
+            {
+                validate.IsDefined("perspective", _perspective);
+                validate.IsUndefined("orthographic", _orthographic);
+            }
+
+            if (_type == CameraType.orthographic)
+            {
+                validate.IsUndefined("perspective", _perspective);
+                validate.IsDefined("orthographic", _orthographic);
+            }
+
+            base.OnValidateReferences(validate);
         }
 
         #endregion
@@ -154,15 +175,27 @@ namespace SharpGLTF.Schema2
 
         #region API
 
-        public static void CheckParameters(float xmag, float ymag, float znear, float zfar)
+        public static void VerifyParameters(float xmag, float ymag, float znear, float zfar)
         {
-            Guard.MustBeGreaterThan(xmag, 0, nameof(xmag));
-            Guard.MustBeGreaterThan(ymag, 0, nameof(ymag));
-
-            Guard.MustBeGreaterThanOrEqualTo(znear, 0, nameof(znear));
-            Guard.MustBeGreaterThanOrEqualTo(zfar, 0, nameof(zfar));
+            Guard.MustBeGreaterThanOrEqualTo(znear, (float)_znearMinimum, nameof(znear));
+            Guard.MustBeGreaterThanOrEqualTo(zfar, (float)_zfarMinimum, nameof(zfar));
             Guard.MustBeGreaterThan(zfar, znear, nameof(zfar));
             Guard.MustBeLessThan(zfar, float.PositiveInfinity, nameof(zfar));
+
+            // these are considered warnings
+            // Guard.MustBeGreaterThan(xmag, 0, nameof(xmag));
+            // Guard.MustBeGreaterThan(ymag, 0, nameof(ymag));
+        }
+
+        #endregion
+
+        #region validation
+
+        protected override void OnValidateContent(Validation.ValidationContext validate)
+        {
+            validate.That(() => VerifyParameters(this.XMag, this.YMag, this.ZNear, this.ZFar));
+
+            base.OnValidateContent(validate);
         }
 
         #endregion
@@ -177,7 +210,7 @@ namespace SharpGLTF.Schema2
 
         internal CameraPerspective(float? aspectRatio, float yfov, float znear, float zfar)
         {
-            CheckParameters(aspectRatio, yfov, znear, zfar);
+            VerifyParameters(aspectRatio, yfov, znear, zfar);
 
             this._aspectRatio = aspectRatio ?? null;
             this._yfov = yfov;
@@ -225,15 +258,26 @@ namespace SharpGLTF.Schema2
 
         #region API
 
-        public static void CheckParameters(float? aspectRatio, float yfov, float znear, float zfar = float.PositiveInfinity)
+        public static void VerifyParameters(float? aspectRatio, float yfov, float znear, float zfar = float.PositiveInfinity)
         {
-            if (aspectRatio.HasValue) Guard.MustBeGreaterThanOrEqualTo(aspectRatio.Value, 0, nameof(aspectRatio));
-            Guard.MustBeGreaterThan(yfov, 0, nameof(yfov));
-            Guard.MustBeLessThan(yfov, (float)Math.PI, nameof(yfov));
+            Guard.MustBeGreaterThanOrEqualTo(aspectRatio.AsValue(1), (float)_aspectRatioMinimum, nameof(aspectRatio));
+            Guard.MustBeGreaterThan(yfov, (float)_yfovMinimum, nameof(yfov));
+            // Guard.MustBeLessThan(yfov, (float)Math.PI, nameof(yfov));
 
-            Guard.MustBeGreaterThanOrEqualTo(znear, 0, nameof(znear));
-            Guard.MustBeGreaterThanOrEqualTo(zfar, 0, nameof(zfar));
+            Guard.MustBeGreaterThanOrEqualTo(znear, (float)_znearMinimum, nameof(znear));
+            Guard.MustBeGreaterThanOrEqualTo(zfar, (float)_zfarMinimum, nameof(zfar));
             Guard.MustBeGreaterThan(zfar, znear, nameof(zfar));
+        }
+
+        #endregion
+
+        #region validation
+
+        protected override void OnValidateContent(Validation.ValidationContext validate)
+        {
+            validate.That(() => VerifyParameters(this.AspectRatio, this.VerticalFOV, this.ZNear, this.ZFar));
+
+            base.OnValidateContent(validate);
         }
 
         #endregion
@@ -243,7 +287,7 @@ namespace SharpGLTF.Schema2
     {
         /// <summary>
         /// Creates a new <see cref="Camera"/> instance.
-        /// and adds it to <see cref="ModelRoot.LogicalCameras"/>.
+        /// and appends it to <see cref="ModelRoot.LogicalCameras"/>.
         /// </summary>
         /// <param name="name">The name of the instance.</param>
         /// <returns>A <see cref="Camera"/> instance.</returns>

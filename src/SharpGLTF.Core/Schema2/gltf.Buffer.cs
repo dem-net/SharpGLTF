@@ -3,7 +3,7 @@ using System.Linq;
 
 namespace SharpGLTF.Schema2
 {
-    [System.Diagnostics.DebuggerDisplay("Buffer[{LogicalIndex}] {Name} Bytes:{_Data.Length}")]
+    [System.Diagnostics.DebuggerDisplay("Buffer[{LogicalIndex}] {Name} Bytes:{_Content?.Length ?? 0}")]
     public sealed partial class Buffer
     {
         #region lifecycle
@@ -41,21 +41,24 @@ namespace SharpGLTF.Schema2
 
         #region binary read
 
-        const string EMBEDDEDOCTETSTREAM = "data:application/octet-stream;base64,";
-        const string EMBEDDEDGLTFBUFFER = "data:application/gltf-buffer;base64,";
+        const string EMBEDDEDOCTETSTREAM = "data:application/octet-stream";
+        const string EMBEDDEDGLTFBUFFER = "data:application/gltf-buffer";
 
-        internal void _ResolveUri(ReadContext context)
+        internal void _ResolveUri(IO.ReadContext context)
         {
             _Content = _LoadBinaryBufferUnchecked(_uri, context);
 
             _uri = null; // When _Data is not empty, clear URI
         }
 
-        private static Byte[] _LoadBinaryBufferUnchecked(string uri, ReadContext context)
+        private static Byte[] _LoadBinaryBufferUnchecked(string uri, IO.ReadContext context)
         {
-            return uri._TryParseBase64Unchecked(EMBEDDEDGLTFBUFFER)
-                ?? uri._TryParseBase64Unchecked(EMBEDDEDOCTETSTREAM)
-                ?? context.ReadBytes(uri).ToArray();
+            var data = uri.TryParseBase64Unchecked(EMBEDDEDGLTFBUFFER, EMBEDDEDOCTETSTREAM);
+            if (data != null) return data;
+
+            return context
+                .ReadAllBytesToEnd(uri)
+                .ToUnderlayingArray();
         }
 
         #endregion
@@ -67,12 +70,12 @@ namespace SharpGLTF.Schema2
         /// </summary>
         /// <param name="writer">The satellite asset writer</param>
         /// <param name="satelliteUri">A local satellite URI</param>
-        internal void _WriteToSatellite(AssetWriter writer, string satelliteUri)
+        internal void _WriteToSatellite(IO.WriteContext writer, string satelliteUri)
         {
-            this._uri = satelliteUri;
-            this._byteLength = _Content.Length;
+            writer.WriteAllBytesToEnd(satelliteUri, new ArraySegment<byte>(_Content.GetPaddedContent()));
 
-            writer(satelliteUri, new ArraySegment<byte>(_Content.GetPaddedContent()) );
+            this._uri = Uri.EscapeUriString(satelliteUri);
+            this._byteLength = _Content.Length;
         }
 
         /// <summary>
@@ -86,7 +89,7 @@ namespace SharpGLTF.Schema2
 
         /// <summary>
         /// Called by the serializer immediatelly after
-        /// calling <see cref="_WriteToSatellite(AssetWriter, string)"/>
+        /// calling <see cref="_WriteToSatellite(IO.WriteContext, string)"/>
         /// or <see cref="_WriteToInternal"/>
         /// </summary>
         internal void _ClearAfterWrite()
@@ -112,21 +115,38 @@ namespace SharpGLTF.Schema2
 
         #region validation
 
-        protected override void OnValidateReferences(Validation.ValidationContext result)
+        internal void OnValidateBinaryChunk(Validation.ValidationContext validate, Byte[] binaryChunk)
         {
-            base.OnValidateReferences(result);
+            validate = validate.GetContext(this);
 
-            result.CheckSchemaIsValidURI("Uri", this._uri);
-
-            result.CheckSchemaIsInRange("ByteLength", _byteLength, _byteLengthMinimum, int.MaxValue);
-            // result.CheckSchemaIsMultipleOf("ByteLength", _byteLength, 4);
+            if (_uri == null)
+            {
+                validate
+                    .NotNull(nameof(binaryChunk), binaryChunk)
+                    .IsLessOrEqual("ByteLength", _byteLength, binaryChunk.Length);
+            }
+            else
+            {
+                validate
+                    .IsValidURI(nameof(_uri), _uri, EMBEDDEDGLTFBUFFER, EMBEDDEDOCTETSTREAM);
+            }
         }
 
-        protected override void OnValidate(Validation.ValidationContext result)
+        protected override void OnValidateReferences(Validation.ValidationContext validate)
         {
-            base.OnValidate(result);
+            validate.IsGreaterOrEqual("ByteLength", _byteLength, _byteLengthMinimum);
+            // result.CheckSchemaIsMultipleOf("ByteLength", _byteLength, 4);
 
-            if (_Content.Length < _byteLength) result.AddDataError("ByteLength", $"Actual data length {_Content.Length} is less than the declared buffer byteLength {_byteLength}.");
+            base.OnValidateReferences(validate);
+        }
+
+        protected override void OnValidateContent(Validation.ValidationContext validate)
+        {
+            validate
+                .NotNull("Content", _Content)
+                .IsLessOrEqual("ByteLength", _byteLength, _Content.Length);
+
+            base.OnValidateContent(validate);
         }
 
         #endregion
@@ -172,13 +192,11 @@ namespace SharpGLTF.Schema2
         }
 
         /// <summary>
-        /// Merges all the <see cref="ModelRoot.LogicalBuffers"/> instances into a single, big one.
+        /// Merges all the <see cref="ModelRoot.LogicalBuffers"/> instances into a single big one.
         /// </summary>
         /// <remarks>
         /// When merging the buffers, it also adjusts the BufferView offsets so the data they point to remains the same.
-        ///
         /// If images are required to be included in the binary, call <see cref="ModelRoot.MergeImages"/> before calling <see cref="MergeBuffers"/>
-        ///
         /// This action cannot be reversed.
         /// </remarks>
         public void MergeBuffers()

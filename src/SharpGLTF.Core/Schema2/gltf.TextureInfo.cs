@@ -47,6 +47,17 @@ namespace SharpGLTF.Schema2
         }
 
         #endregion
+
+        #region Validation
+
+        protected override void OnValidateReferences(Validation.ValidationContext validate)
+        {
+            validate.IsNullOrIndex("Index", _index, validate.Root.LogicalTextures);
+
+            base.OnValidateReferences(validate);
+        }
+
+        #endregion
     }
 
     [System.Diagnostics.DebuggerDisplay("TextureTransform {Offset} {Scale} {Rotation} {TextureCoordinate}")]
@@ -54,7 +65,9 @@ namespace SharpGLTF.Schema2
     {
         #region lifecycle
 
+        #pragma warning disable CA1801 // Review unused parameters
         internal TextureTransform(TextureInfo parent) { }
+        #pragma warning restore CA1801 // Review unused parameters
 
         #endregion
 

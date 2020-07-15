@@ -139,7 +139,7 @@ namespace SharpGLTF.Schema2
         public static Node WithPerspectiveCamera(this Node node, float? aspectRatio, float fovy, float znear, float zfar = float.PositiveInfinity)
         {
             Guard.NotNull(node, nameof(node));
-            CameraPerspective.CheckParameters(aspectRatio, fovy, znear, zfar);
+            CameraPerspective.VerifyParameters(aspectRatio, fovy, znear, zfar);
 
             var camera = node.LogicalParent.CreateCamera();
             camera.SetPerspectiveMode(aspectRatio, fovy, znear, zfar);
@@ -152,7 +152,7 @@ namespace SharpGLTF.Schema2
         public static Node WithOrthographicCamera(this Node node, float xmag, float ymag, float znear, float zfar)
         {
             Guard.NotNull(node, nameof(node));
-            CameraOrthographic.CheckParameters(xmag, ymag, znear, zfar);
+            CameraOrthographic.VerifyParameters(xmag, ymag, znear, zfar);
 
             var camera = node.LogicalParent.CreateCamera();
             camera.SetOrthographicMode(xmag, ymag, znear, zfar);
@@ -229,9 +229,9 @@ namespace SharpGLTF.Schema2
             var meshes = scene.LogicalParent.LogicalMeshes;
 
             return instance
-                .DrawableReferences
+                .DrawableInstances
                 .Where(item => item.Transform.Visible)
-                .SelectMany(item => meshes[item.MeshIndex].EvaluateTriangles(item.Transform));
+                .SelectMany(item => meshes[item.Template.LogicalMeshIndex].EvaluateTriangles(item.Transform));
         }
 
         /// <summary>
@@ -265,9 +265,9 @@ namespace SharpGLTF.Schema2
             var meshes = scene.LogicalParent.LogicalMeshes;
 
             return instance
-                .DrawableReferences
+                .DrawableInstances
                 .Where(item => item.Transform.Visible)
-                .SelectMany(item => meshes[item.MeshIndex].EvaluateTriangles<TvG, TvM, VertexEmpty>(item.Transform));
+                .SelectMany(item => meshes[item.Template.LogicalMeshIndex].EvaluateTriangles<TvG, TvM, VertexEmpty>(item.Transform));
         }
 
         public static Scenes.SceneBuilder ToSceneBuilder(this Scene srcScene)

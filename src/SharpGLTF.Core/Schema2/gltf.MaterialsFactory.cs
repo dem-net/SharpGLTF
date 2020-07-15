@@ -17,8 +17,21 @@ namespace SharpGLTF.Schema2
         {
             if (this._pbrMetallicRoughness == null) this._pbrMetallicRoughness = new MaterialPBRMetallicRoughness();
 
-            this.RemoveExtensions<MaterialPBRSpecularGlossiness>();
             this.RemoveExtensions<MaterialUnlit>();
+            this.RemoveExtensions<MaterialClearCoat>();
+            this.RemoveExtensions<MaterialPBRSpecularGlossiness>();
+        }
+
+        /// <summary>
+        /// Initializes this <see cref="Material"/> instance with PBR Metallic Roughness attributes and Clear Coat extension.
+        /// </summary>
+        public void InitializePBRMetallicRoughnessClearCoat()
+        {
+            if (this._pbrMetallicRoughness == null) this._pbrMetallicRoughness = new MaterialPBRMetallicRoughness();
+
+            this.RemoveExtensions<MaterialUnlit>();
+            this.RemoveExtensions<MaterialPBRSpecularGlossiness>();
+            this.SetExtension(new MaterialClearCoat(this));
         }
 
         /// <summary>
@@ -37,6 +50,7 @@ namespace SharpGLTF.Schema2
             }
 
             this.RemoveExtensions<MaterialUnlit>();
+            this.RemoveExtensions<MaterialClearCoat>();
             this.SetExtension(new MaterialPBRSpecularGlossiness(this));
         }
 
@@ -63,6 +77,13 @@ namespace SharpGLTF.Schema2
             if (pbrSpecGloss != null)
             {
                 var channels = pbrSpecGloss.GetChannels(this);
+                foreach (var c in channels) yield return c;
+            }
+
+            var clearCoat = this.GetExtension<MaterialClearCoat>();
+            if (clearCoat != null)
+            {
+                var channels = clearCoat.GetChannels(this);
                 foreach (var c in channels) yield return c;
             }
 
@@ -119,24 +140,6 @@ namespace SharpGLTF.Schema2
         }
 
         #endregion
-    }
-
-    public partial class ModelRoot
-    {
-        /// <summary>
-        /// Creates a new <see cref="Material"/> instance and adds it to <see cref="ModelRoot.LogicalMaterials"/>.
-        /// </summary>
-        /// <param name="name">The name of the instance.</param>
-        /// <returns>A <see cref="Material"/> instance.</returns>
-        public Material CreateMaterial(string name = null)
-        {
-            var mat = new Material();
-            mat.Name = name;
-
-            _materials.Add(mat);
-
-            return mat;
-        }
     }
 
     internal sealed partial class MaterialPBRMetallicRoughness
@@ -210,7 +213,9 @@ namespace SharpGLTF.Schema2
 
     internal sealed partial class MaterialPBRSpecularGlossiness
     {
+        #pragma warning disable CA1801 // Review unused parameters
         internal MaterialPBRSpecularGlossiness(Material material) { }
+        #pragma warning restore CA1801 // Review unused parameters
 
         protected override IEnumerable<ExtraProperties> GetLogicalChildren()
         {
@@ -278,6 +283,68 @@ namespace SharpGLTF.Schema2
 
     internal sealed partial class MaterialUnlit
     {
+        #pragma warning disable CA1801 // Review unused parameters
         internal MaterialUnlit(Material material) { }
+        #pragma warning restore CA1801 // Review unused parameters
+    }
+
+    internal sealed partial class MaterialClearCoat
+    {
+        #pragma warning disable CA1801 // Review unused parameters
+        internal MaterialClearCoat(Material material) { }
+        #pragma warning restore CA1801 // Review unused parameters
+
+        protected override IEnumerable<ExtraProperties> GetLogicalChildren()
+        {
+            return base.GetLogicalChildren().ConcatItems(_clearcoatTexture, _clearcoatRoughnessTexture, _clearcoatNormalTexture);
+        }
+
+        private TextureInfo _GetClearCoatTexture(bool create)
+        {
+            if (create && _clearcoatTexture == null) _clearcoatTexture = new TextureInfo();
+            return _clearcoatTexture;
+        }
+
+        private TextureInfo _GetClearCoatRoughnessTexture(bool create)
+        {
+            if (create && _clearcoatRoughnessTexture == null) _clearcoatRoughnessTexture = new TextureInfo();
+            return _clearcoatRoughnessTexture;
+        }
+
+        private MaterialNormalTextureInfo _GetClearCoatNormalTexture(bool create)
+        {
+            if (create && _clearcoatNormalTexture == null) _clearcoatNormalTexture = new MaterialNormalTextureInfo();
+            return _clearcoatNormalTexture;
+        }
+
+        public IEnumerable<MaterialChannel> GetChannels(Material material)
+        {
+            yield return new MaterialChannel
+                (
+                material, "ClearCoat",
+                _GetClearCoatTexture,
+                (float)_clearcoatFactorDefault,
+                () => (float)this._clearcoatFactor.AsValue(_clearcoatFactorDefault),
+                value => this._clearcoatFactor = value
+                );
+
+            yield return new MaterialChannel
+                (
+                material, "ClearCoatRoughness",
+                _GetClearCoatRoughnessTexture,
+                (float)_clearcoatRoughnessFactorDefault,
+                () => (float)this._clearcoatRoughnessFactor.AsValue(_clearcoatRoughnessFactorDefault),
+                value => this._clearcoatRoughnessFactor = value
+                );
+
+            yield return new MaterialChannel
+                (
+                material, "ClearCoatNormal",
+                _GetClearCoatNormalTexture,
+                MaterialNormalTextureInfo.ScaleDefault,
+                () => _GetClearCoatNormalTexture(false)?.Scale ?? MaterialNormalTextureInfo.ScaleDefault,
+                value => _GetClearCoatNormalTexture(true).Scale = value
+                );
+        }
     }
 }

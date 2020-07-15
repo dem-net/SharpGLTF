@@ -7,7 +7,7 @@ using SharpGLTF.Collections;
 namespace SharpGLTF.Schema2
 {
     [System.Diagnostics.DebuggerDisplay("Model Root")]
-    public sealed partial class ModelRoot
+    public sealed partial class ModelRoot : IConvertibleToGltf2
     {
         #region lifecycle
 
@@ -53,16 +53,33 @@ namespace SharpGLTF.Schema2
         /// </remarks>
         public ModelRoot DeepClone()
         {
+            // prepare the in-memory temporary storage
             var dict = new Dictionary<string, ArraySegment<Byte>>();
-            var settings = WriteContext.ForDeepClone(dict);
+            var wcontext = IO.WriteContext
+                .CreateFromDictionary(dict)
+                .WithDeepCloneSettings();
 
-            System.Diagnostics.Debug.Assert(settings._NoCloneWatchdog, "invalid clone settings");
+            System.Diagnostics.Debug.Assert(wcontext._NoCloneWatchdog, "invalid clone settings");
 
-            this.Write(settings, "deepclone");
+            // write the model to the temporary storage
 
-            var context = ReadContext.CreateFromDictionary(dict);
-            context.Validation = Validation.ValidationMode.Strict;
-            return context._ReadFromDictionary("deepclone.gltf");
+            wcontext.WriteTextSchema2("deepclone", this);
+
+            // restore the model from the temporary storage
+
+            var rcontext = IO.ReadContext.CreateFromDictionary(dict);
+            rcontext.Validation = Validation.ValidationMode.Skip;
+            var cloned = rcontext._ReadFromDictionary("deepclone.gltf");
+
+            // Restore MemoryImage source URIs (they're not cloned as part of the serialization)
+            foreach (var srcImg in this.LogicalImages)
+            {
+                var dstImg = cloned.LogicalImages[srcImg.LogicalIndex];
+                var img = dstImg.Content;
+                dstImg.Content = new Memory.MemoryImage(img._GetBuffer(), srcImg.Content.SourcePath);
+            }
+
+            return cloned;
         }
 
         #endregion
@@ -76,6 +93,8 @@ namespace SharpGLTF.Schema2
         public IEnumerable<String> ExtensionsRequired           => _extensionsRequired;
 
         public IEnumerable<String> IncompatibleExtensions       => _extensionsRequired.Except(ExtensionsFactory.SupportedExtensions).ToList();
+
+        ModelRoot IConvertibleToGltf2.ToGltf2() { return this; }
 
         #endregion
 
@@ -145,71 +164,31 @@ namespace SharpGLTF.Schema2
 
         #region validation
 
-        protected override void OnValidateReferences(Validation.ValidationContext result)
+        protected override void OnValidateReferences(Validation.ValidationContext validate)
         {
-            if (Asset == null) result.AddSchemaError(nameof(Asset), "is missing");
+            validate
+                .NotNull(nameof(Asset), this.Asset)
+                .IsNullOrIndex(nameof(DefaultScene), _scene, this.LogicalScenes);
 
-            result.CheckArrayIndexAccess(nameof(DefaultScene), _scene, this.LogicalScenes);
+            Asset.ValidateReferences(validate);
 
-            foreach (var b in _buffers) b.ValidateReferences(result);
-            foreach (var v in _bufferViews) v.ValidateReferences(result);
-            foreach (var a in _accessors) a.ValidateReferences(result);
-
-            foreach (var i in _images) i.ValidateReferences(result);
-            foreach (var s in _samplers) s.ValidateReferences(result);
-            foreach (var t in _textures) t.ValidateReferences(result);
-            foreach (var m in _materials) m.ValidateReferences(result);
-
-            foreach (var m in _meshes) m.ValidateReferences(result);
-            foreach (var s in _skins) s.ValidateReferences(result);
-            foreach (var c in _cameras) c.ValidateReferences(result);
-
-            foreach (var n in _nodes) n.ValidateReferences(result);
-            foreach (var s in _scenes) s.ValidateReferences(result);
-            foreach (var a in _animations) a.ValidateReferences(result);
-
-            base.OnValidateReferences(result);
-        }
-
-        protected override void OnValidate(Validation.ValidationContext result)
-        {
-            // 1st check version number
-
-            Asset.Validate(result);
-
-            if (result.Result.HasErrors) return;
-
-            // 2nd check incompatible extensions
+            // check incompatible extensions
 
             foreach (var iex in this.IncompatibleExtensions)
             {
-                result.UnsupportedExtensionError(iex);
+                validate._LinkThrow("Extensions", iex);
             }
 
-            if (result.Result.HasErrors) return;
+            base.OnValidateReferences(validate);
 
-            // 3rd check base class
+            Node._ValidateParentHierarchy(this.LogicalNodes, validate);
+        }
 
-            base.OnValidate(result);
+        protected override void OnValidateContent(Validation.ValidationContext validate)
+        {
+            Asset.ValidateContent(validate);
 
-            // 4th check contents
-
-            foreach (var b in _buffers) b.Validate(result);
-            foreach (var v in _bufferViews) v.Validate(result);
-            foreach (var a in _accessors) a.Validate(result);
-
-            foreach (var i in _images) i.Validate(result);
-            foreach (var s in _samplers) s.Validate(result);
-            foreach (var t in _textures) t.Validate(result);
-            foreach (var m in _materials) m.Validate(result);
-
-            foreach (var m in _meshes) m.Validate(result);
-            foreach (var s in _skins) s.Validate(result);
-            foreach (var c in _cameras) c.Validate(result);
-
-            foreach (var n in _nodes) n.Validate(result);
-            foreach (var s in _scenes) s.Validate(result);
-            foreach (var a in _animations) a.Validate(result);
+            base.OnValidateContent(validate);
         }
 
         #endregion

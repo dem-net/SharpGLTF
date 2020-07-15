@@ -89,20 +89,15 @@ namespace SharpGLTF.Schema2
 
         #region Validation
 
-        protected override void OnValidate(Validation.ValidationContext result)
+        protected override void OnValidateReferences(Validation.ValidationContext validate)
         {
-            base.OnValidate(result);
+            base.OnValidateReferences(validate);
 
-            if (!Version.TryParse(_version, out Version ver))
-            {
-                result.AddSemanticError("Version", $"Unknown glTF major asset version: {_version}.");
-                return;
-            }
+            validate.IsTrue(nameof(Version), Version.TryParse(_version, out Version ver), $"Unknown glTF major asset version: {_version}.");
 
-            if (Version < MINVERSION) result.AddSemanticError($"Minimum supported version is {MINVERSION} but found:{MinVersion}");
-            if (MinVersion > MAXVERSION) result.AddSemanticError( $"Maximum supported version is {MAXVERSION} but found:{MinVersion}");
+            validate.IsGreaterOrEqual(nameof(Version), Version, MINVERSION);
 
-            if (MinVersion > Version) result.AddSemanticWarning("Version", $"Asset minVersion '{MinVersion}' is greater than version '{Version}'.");
+            // if (MinVersion > MAXVERSION) result.AddSemanticError( $"Maximum supported version is {MAXVERSION} but found:{MinVersion}");
         }
 
         #endregion
